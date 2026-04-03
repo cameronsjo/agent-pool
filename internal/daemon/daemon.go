@@ -20,24 +20,50 @@ import (
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
 )
 
+// Spawner abstracts expert session spawning for testability.
+type Spawner interface {
+	Spawn(ctx context.Context, logger *slog.Logger, cfg *expert.SpawnConfig) (*expert.Result, error)
+}
+
+// defaultSpawner delegates to expert.Spawn.
+type defaultSpawner struct{}
+
+func (defaultSpawner) Spawn(ctx context.Context, logger *slog.Logger, cfg *expert.SpawnConfig) (*expert.Result, error) {
+	return expert.Spawn(ctx, logger, cfg)
+}
+
 // Daemon is the agent-pool process supervisor.
 type Daemon struct {
 	cfg     *config.PoolConfig
 	poolDir string
 	logger  *slog.Logger
+	spawner Spawner
 
 	mu   sync.Mutex
 	busy map[string]bool // tracks which experts are currently spawned
 }
 
+// Option configures a Daemon.
+type Option func(*Daemon)
+
+// WithSpawner sets a custom spawner (used in tests).
+func WithSpawner(s Spawner) Option {
+	return func(d *Daemon) { d.spawner = s }
+}
+
 // New creates a Daemon for the given pool.
-func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger) *Daemon {
-	return &Daemon{
+func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Option) *Daemon {
+	d := &Daemon{
 		cfg:     cfg,
 		poolDir: poolDir,
 		logger:  logger,
 		busy:    make(map[string]bool),
+		spawner: defaultSpawner{},
 	}
+	for _, opt := range opts {
+		opt(d)
+	}
+	return d
 }
 
 // Run starts the daemon's main loop. It blocks until ctx is cancelled.
@@ -171,7 +197,7 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 		TaskMessage:  msg,
 	}
 
-	result, err := expert.Spawn(ctx, d.logger, cfg)
+	result, err := d.spawner.Spawn(ctx, d.logger, cfg)
 	if err != nil {
 		d.logger.Error("Failed to spawn expert",
 			"expert", expertName,

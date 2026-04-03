@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
@@ -205,6 +206,130 @@ This should fail and preserve the original.
 	}
 }
 
+func TestRoute_UnreadableSourceFile(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root")
+	}
+
+	poolDir := t.TempDir()
+
+	postoffice := filepath.Join(poolDir, "postoffice")
+	inbox := filepath.Join(poolDir, "experts", "auth", "inbox")
+	for _, dir := range []string{postoffice, inbox} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgContent := `---
+id: task-400
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T17:00:00Z
+---
+
+Unreadable source test.
+`
+	srcPath := filepath.Join(postoffice, "task-400.md")
+	if err := os.WriteFile(srcPath, []byte(msgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make the file unreadable
+	if err := os.Chmod(srcPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(srcPath, 0o644)
+	})
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	_, err := mail.Route(logger, poolDir, srcPath)
+	if err == nil {
+		t.Fatal("expected error when source file is unreadable")
+	}
+}
+
+func TestRoute_ReadOnlyInboxDir(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("test requires non-root")
+	}
+
+	poolDir := t.TempDir()
+
+	postoffice := filepath.Join(poolDir, "postoffice")
+	inbox := filepath.Join(poolDir, "experts", "auth", "inbox")
+	for _, dir := range []string{postoffice, inbox} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	msgContent := `---
+id: task-500
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T18:00:00Z
+---
+
+Read-only inbox test.
+`
+	srcPath := filepath.Join(postoffice, "task-500.md")
+	if err := os.WriteFile(srcPath, []byte(msgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Make inbox read-only so file creation fails
+	if err := os.Chmod(inbox, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(inbox, 0o755)
+	})
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	_, err := mail.Route(logger, poolDir, srcPath)
+	if err == nil {
+		t.Fatal("expected error when inbox directory is read-only")
+	}
+
+	if !strings.Contains(err.Error(), "copying") {
+		t.Errorf("error should mention copying, got: %v", err)
+	}
+}
+
+func TestRoute_ParseError(t *testing.T) {
+	poolDir := t.TempDir()
+
+	postoffice := filepath.Join(poolDir, "postoffice")
+	if err := os.MkdirAll(postoffice, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write invalid content (no valid frontmatter)
+	srcPath := filepath.Join(postoffice, "garbage.md")
+	if err := os.WriteFile(srcPath, []byte("this is not valid frontmatter"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	_, err := mail.Route(logger, poolDir, srcPath)
+	if err == nil {
+		t.Fatal("expected error for invalid message content")
+	}
+
+	if !strings.Contains(err.Error(), "parsing") {
+		t.Errorf("error should mention parsing, got: %v", err)
+	}
+
+	// Verify the original file is NOT deleted
+	if _, err := os.Stat(srcPath); os.IsNotExist(err) {
+		t.Error("original file should be preserved when parsing fails")
+	}
+}
+
 // Test Plan for router.go
 //
 // ResolveInbox (Classification: PURE LOGIC)
@@ -217,3 +342,6 @@ This should fail and preserve the original.
 //   [x] Unhappy: unknown recipient (TestRoute_UnknownRecipient)
 //   [x] Behavioral: idempotent delivery (TestRoute_IdempotentDelivery)
 //   [x] Behavioral: original preserved on failure (TestRoute_OriginalPreservedOnCopyFailure)
+//   [x] Unhappy: unreadable source file (TestRoute_UnreadableSourceFile)
+//   [x] Unhappy: read-only inbox dir (TestRoute_ReadOnlyInboxDir)
+//   [x] Unhappy: parse error in message (TestRoute_ParseError)
