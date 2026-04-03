@@ -14,10 +14,11 @@ type LogEntry struct {
 	TaskID    string
 	Timestamp time.Time
 	From      string
+	ExitCode  int
 	Summary   string
 }
 
-const indexHeader = "| Task ID | Timestamp | From | Summary |\n|---------|-----------|------|---------|\n"
+const indexHeader = "| Task ID | Timestamp | From | Exit | Summary |\n|---------|-----------|------|-----:|---------|\n"
 
 // WriteLog writes raw session output to logs/{task-id}.json.
 func WriteLog(expertDir string, taskID string, output []byte) error {
@@ -65,15 +66,31 @@ func AppendIndex(expertDir string, entry *LogEntry) error {
 	summary := strings.ReplaceAll(entry.Summary, "\n", " ")
 	summary = strings.ReplaceAll(summary, "|", "\\|")
 
-	row := fmt.Sprintf("| %s | %s | %s | %s |\n",
+	row := fmt.Sprintf("| %s | %s | %s | %d | %s |\n",
 		entry.TaskID,
 		entry.Timestamp.UTC().Format(time.RFC3339),
 		entry.From,
+		entry.ExitCode,
 		summary,
 	)
 
 	if _, err := f.WriteString(row); err != nil {
 		return fmt.Errorf("writing index row: %w", err)
+	}
+
+	return nil
+}
+
+// WriteStderr writes raw stderr output to logs/{task-id}.stderr.
+func WriteStderr(expertDir string, taskID string, stderr []byte) error {
+	logsDir := filepath.Join(expertDir, "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		return fmt.Errorf("creating logs directory: %w", err)
+	}
+
+	path := filepath.Join(logsDir, taskID+".stderr")
+	if err := os.WriteFile(path, stderr, 0o644); err != nil {
+		return fmt.Errorf("writing stderr file: %w", err)
 	}
 
 	return nil

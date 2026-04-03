@@ -101,7 +101,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 		"experts", len(d.cfg.Experts),
 	)
 
-	// Drain any existing inbox files from before the daemon started
+	// Drain pre-existing messages from before the daemon started
+	d.drainPostoffice(ctx)
 	d.drainAllInboxes(ctx)
 
 	// Main event loop
@@ -151,14 +152,15 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 	)
 }
 
-// handleInbox spawns an expert session for a message in an inbox.
-func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string) {
+// handleInbox is the entry point from the watcher event loop. It acquires the
+// busy flag for the expert, drains all queued inbox messages iteratively, then
+// releases the flag.
+func (d *Daemon) handleInbox(ctx context.Context, expertName string, _ string) {
 	d.mu.Lock()
 	if d.busy[expertName] {
 		d.mu.Unlock()
 		d.logger.Info("Expert busy, message queued",
 			"expert", expertName,
-			"path", path,
 		)
 		return
 	}
@@ -169,11 +171,15 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 		d.mu.Lock()
 		d.busy[expertName] = false
 		d.mu.Unlock()
-
-		// Drain remaining inbox files after this spawn completes
-		d.drainInbox(ctx, expertName)
 	}()
 
+	d.drainInbox(ctx, expertName)
+}
+
+// processInboxMessage handles a single inbox file: parse, spawn, log, and
+// conditionally remove. Returns true if the file was successfully processed
+// (regardless of exit code), false if parsing or spawning failed.
+func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, path string) bool {
 	msg, err := mail.ParseFile(path)
 	if err != nil {
 		d.logger.Error("Failed to parse inbox message",
@@ -181,7 +187,7 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 			"path", path,
 			"error", err,
 		)
-		return
+		return false
 	}
 
 	model, tools := d.resolveExpertConfig(expertName)
@@ -204,10 +210,10 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 			"task_id", msg.ID,
 			"error", err,
 		)
-		return
+		return false
 	}
 
-	// Write logs
+	// Always write logs — the archive is append-only by design
 	if err := expert.WriteLog(expertDir, result.TaskID, result.Output); err != nil {
 		d.logger.Error("Failed to write task log",
 			"expert", expertName,
@@ -216,10 +222,21 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 		)
 	}
 
+	if len(result.Stderr) > 0 {
+		if err := expert.WriteStderr(expertDir, result.TaskID, result.Stderr); err != nil {
+			d.logger.Error("Failed to write stderr log",
+				"expert", expertName,
+				"task_id", result.TaskID,
+				"error", err,
+			)
+		}
+	}
+
 	if err := expert.AppendIndex(expertDir, &expert.LogEntry{
 		TaskID:    result.TaskID,
 		Timestamp: msg.Timestamp,
 		From:      msg.From,
+		ExitCode:  result.ExitCode,
 		Summary:   result.Summary,
 	}); err != nil {
 		d.logger.Error("Failed to append log index",
@@ -229,7 +246,18 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 		)
 	}
 
-	// Remove processed inbox file
+	if result.ExitCode != 0 {
+		d.logger.Warn("Expert session failed",
+			"expert", expertName,
+			"task_id", result.TaskID,
+			"exit_code", result.ExitCode,
+			"duration", result.Duration,
+			"summary", result.Summary,
+		)
+		return true
+	}
+
+	// Remove inbox file only on success
 	if err := os.Remove(path); err != nil {
 		d.logger.Warn("Failed to remove processed inbox file",
 			"path", path,
@@ -244,6 +272,8 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, path string
 		"duration", result.Duration,
 		"summary", result.Summary,
 	)
+
+	return true
 }
 
 // drainAllInboxes processes any files sitting in expert inboxes when the daemon starts.
@@ -253,9 +283,9 @@ func (d *Daemon) drainAllInboxes(ctx context.Context) {
 	}
 }
 
-// drainInbox processes the oldest unprocessed file in an expert's inbox.
-// Called after each spawn completes and on startup to catch files that arrived
-// while the daemon was down or an expert was busy.
+// drainInbox iteratively processes all .md files in an expert's inbox (oldest
+// first). It reads the file list once and processes each in order. Files that
+// fail to parse are skipped (logged and left in inbox for manual inspection).
 func (d *Daemon) drainInbox(ctx context.Context, expertName string) {
 	inboxDir := mail.ResolveInbox(d.poolDir, expertName)
 
@@ -285,8 +315,29 @@ func (d *Daemon) drainInbox(ctx context.Context, expertName string) {
 		return infoI.ModTime().Before(infoJ.ModTime())
 	})
 
-	// Process the oldest one — handleInbox will recurse via drainInbox
-	d.handleInbox(ctx, expertName, mdFiles[0])
+	for _, path := range mdFiles {
+		d.processInboxMessage(ctx, expertName, path)
+	}
+}
+
+// drainPostoffice routes any pre-existing messages in the postoffice directory.
+// Called at startup before drainAllInboxes to ensure unrouted messages get
+// delivered before inbox processing begins.
+func (d *Daemon) drainPostoffice(ctx context.Context) {
+	postofficeDir := filepath.Join(d.poolDir, "postoffice")
+	entries, err := os.ReadDir(postofficeDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".routing-") {
+			continue
+		}
+		d.handlePostoffice(ctx, filepath.Join(postofficeDir, entry.Name()))
+	}
 }
 
 // resolveExpertConfig returns the model and allowed tools for an expert,

@@ -420,3 +420,153 @@ model = "opus"
 
 	shutdownDaemon(t, cancel, errCh)
 }
+
+func TestDaemon_NonZeroExitPreservesInbox(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{
+		result: &expert.Result{
+			TaskID:   "task-fail-001",
+			ExitCode: 1,
+			Output:   []byte(`{"type":"result","result":"something went wrong"}`),
+			Summary:  "Expert errored out",
+			Duration: 50 * time.Millisecond,
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	inboxDir := filepath.Join(poolDir, "experts", "auth", "inbox")
+	writeMessage(t, inboxDir, "task-fail-001", "architect", "auth")
+
+	// Poll for spawn call
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected fakeSpawner to be called")
+	}
+
+	// Allow time for post-spawn processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Log file SHOULD be written even on non-zero exit
+	logPath := filepath.Join(poolDir, "experts", "auth", "logs", "task-fail-001.json")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Error("expected log file to be written even on non-zero exit")
+	}
+
+	// Inbox file should NOT be removed on non-zero exit
+	inboxFile := filepath.Join(inboxDir, "task-fail-001.md")
+	if _, err := os.Stat(inboxFile); os.IsNotExist(err) {
+		t.Error("inbox file should be preserved when exit code is non-zero")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_DrainPostoffice(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	// Create directories manually BEFORE starting daemon, so we can drop a
+	// message into the postoffice before the daemon's ensureDirs runs.
+	postofficeDir := filepath.Join(poolDir, "postoffice")
+	os.MkdirAll(postofficeDir, 0o755)
+	inboxDir := filepath.Join(poolDir, "experts", "auth", "inbox")
+	os.MkdirAll(inboxDir, 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "experts", "auth", "logs"), 0o755)
+
+	// Write a message to postoffice BEFORE the daemon starts
+	msgContent := `---
+id: task-pre-existing
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Pre-existing postoffice message.
+`
+	postPath := filepath.Join(postofficeDir, "task-pre-existing.md")
+	os.WriteFile(postPath, []byte(msgContent), 0o644)
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	// Poll for the message to be routed to auth's inbox AND processed by spawn
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected pre-existing postoffice message to be routed and spawned")
+	}
+	if calls[0].TaskMessage.ID != "task-pre-existing" {
+		t.Errorf("expected task ID 'task-pre-existing', got %q", calls[0].TaskMessage.ID)
+	}
+
+	// Verify original was cleaned up from postoffice
+	if _, err := os.Stat(postPath); !os.IsNotExist(err) {
+		t.Error("message should have been deleted from postoffice after routing")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}

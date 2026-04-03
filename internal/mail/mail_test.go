@@ -129,6 +129,48 @@ Do something.
 `,
 			wantErr: "missing required field: type",
 		},
+		{
+			name: "id with path separator",
+			content: `---
+id: ../../etc/passwd
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Malicious.
+`,
+			wantErr: `invalid message ID "../../etc/passwd": must be a simple filename`,
+		},
+		{
+			name: "id is dot",
+			content: `---
+id: .
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Dot.
+`,
+			wantErr: `invalid message ID ".": must be a simple filename`,
+		},
+		{
+			name: "id is dot-dot",
+			content: `---
+id: ..
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+DotDot.
+`,
+			wantErr: `invalid message ID "..": must be a simple filename`,
+		},
 	}
 
 	for _, tt := range tests {

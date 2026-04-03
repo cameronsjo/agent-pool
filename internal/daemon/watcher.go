@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -161,6 +162,5 @@ func waitForStable(path string) error {
 		return os.ErrNotExist
 	}
 
-	// Size was still changing but we've waited long enough — accept it
-	return nil
+	return fmt.Errorf("file size still changing after %d attempts", stabilityAttempts)
 }

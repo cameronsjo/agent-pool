@@ -47,7 +47,11 @@ func cmdStart() {
 
 	// Resolve poolDir to absolute path for consistent path handling
 	if poolDir == "" {
-		poolDir, _ = os.Getwd()
+		poolDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error getting current directory: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	poolDir, err = filepath.Abs(poolDir)
 	if err != nil {

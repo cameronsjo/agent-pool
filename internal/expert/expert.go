@@ -178,10 +178,10 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	)
 
 	if len(stderr.Bytes()) > 0 {
-		logger.Warn("Expert session stderr",
+		logger.Warn("Expert session produced stderr output",
 			"expert", cfg.Name,
 			"task_id", cfg.TaskMessage.ID,
-			"stderr", stderr.String(),
+			"stderr_bytes", len(stderr.Bytes()),
 		)
 	}
 

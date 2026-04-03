@@ -7,6 +7,7 @@ package mail
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -98,6 +99,10 @@ func Parse(content string, sourcePath string) (*Message, error) {
 	}
 	if msg.Type == "" {
 		return nil, fmt.Errorf("missing required field: type")
+	}
+
+	if msg.ID != filepath.Base(msg.ID) || msg.ID == "." || msg.ID == ".." {
+		return nil, fmt.Errorf("invalid message ID %q: must be a simple filename", msg.ID)
 	}
 
 	if msg.Priority == "" {

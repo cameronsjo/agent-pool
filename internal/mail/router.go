@@ -42,8 +42,8 @@ func Route(logger *slog.Logger, poolDir, filePath string) (*Message, error) {
 
 	inboxDir := ResolveInbox(poolDir, msg.To)
 
-	if _, err := os.Stat(inboxDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("inbox does not exist for recipient %q: %s", msg.To, inboxDir)
+	if _, err := os.Stat(inboxDir); err != nil {
+		return nil, fmt.Errorf("inbox not available for recipient %q: %w", msg.To, err)
 	}
 
 	// Use message ID as filename to avoid collisions on duplicate delivery

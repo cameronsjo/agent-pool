@@ -184,6 +184,7 @@ func TestAppendIndex(t *testing.T) {
 		TaskID:    "task-042",
 		Timestamp: time.Date(2026, 4, 1, 14, 32, 0, 0, time.UTC),
 		From:      "architect",
+		ExitCode:  0,
 		Summary:   "Implemented token endpoint",
 	}
 
@@ -197,6 +198,7 @@ func TestAppendIndex(t *testing.T) {
 		TaskID:    "task-043",
 		Timestamp: time.Date(2026, 4, 1, 15, 0, 0, 0, time.UTC),
 		From:      "concierge",
+		ExitCode:  1,
 		Summary:   "Answered auth question",
 	}
 	if err := expert.AppendIndex(dir, entry2); err != nil {
@@ -212,11 +214,21 @@ func TestAppendIndex(t *testing.T) {
 	if !strings.Contains(content, "| Task ID |") {
 		t.Error("missing table header")
 	}
+	if !strings.Contains(content, "| Exit |") {
+		t.Error("missing Exit column in table header")
+	}
 	if !strings.Contains(content, "task-042") {
 		t.Error("missing first entry")
 	}
 	if !strings.Contains(content, "task-043") {
 		t.Error("missing second entry")
+	}
+	// Verify exit codes appear in the rows
+	if !strings.Contains(content, "| 0 |") {
+		t.Error("missing exit code 0 in first entry")
+	}
+	if !strings.Contains(content, "| 1 |") {
+		t.Error("missing exit code 1 in second entry")
 	}
 }
 
@@ -380,6 +392,24 @@ func TestAppendIndex_SanitizesNewlineInSummary(t *testing.T) {
 	}
 }
 
+func TestWriteStderr(t *testing.T) {
+	dir := t.TempDir()
+	stderr := []byte("error: something went wrong\npanic: oh no")
+
+	if err := expert.WriteStderr(dir, "task-500", stderr); err != nil {
+		t.Fatalf("WriteStderr failed: %v", err)
+	}
+
+	path := filepath.Join(dir, "logs", "task-500.stderr")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading stderr file: %v", err)
+	}
+	if string(data) != string(stderr) {
+		t.Errorf("stderr content mismatch: got %q, want %q", string(data), string(stderr))
+	}
+}
+
 // Test Plan for expert.go + log.go
 //
 // AssemblePrompt (Classification: I/O BOUNDARY + DATA TRANSFORMER)
@@ -401,6 +431,9 @@ func TestAppendIndex_SanitizesNewlineInSummary(t *testing.T) {
 //
 // WriteLog (Classification: I/O BOUNDARY)
 //   [x] Happy: writes log file (TestWriteLog)
+//
+// WriteStderr (Classification: I/O BOUNDARY)
+//   [x] Happy: writes stderr file (TestWriteStderr)
 //
 // AppendIndex (Classification: I/O BOUNDARY)
 //   [x] Happy: creates and appends entries (TestAppendIndex)
