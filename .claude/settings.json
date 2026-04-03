@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "goimports -w \"$CLAUDE_FILE_PATH\" 2>/dev/null; true",
+        "description": "Auto-format Go files on edit"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "command": "echo \"$CLAUDE_FILE_PATH\" | grep -q 'docs/plans/architecture.md' && echo 'BLOCK: Architecture doc requires explicit approval to edit' && exit 1 || exit 0",
+        "description": "Protect architecture doc from accidental edits"
+      }
+    ]
+  }
+}

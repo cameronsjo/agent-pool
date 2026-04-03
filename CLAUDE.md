@@ -65,18 +65,22 @@ scripts/              Build and utility scripts
 make build            # Build binary to bin/agent-pool
 make dev POOL=<path>  # Quick iteration with go run
 make test             # Run all tests
+make test-cover       # Coverage report (HTML)
+make test-gaps        # Show functions below 70% (override with THRESHOLD=N)
 make check            # vet + lint + test
 ```
 
 ## Implementation Status
 
-Currently building **v0.1** — the basic expert lifecycle loop:
+**v0.1 complete** — basic expert lifecycle loop:
 
-- [ ] fsnotify watching postoffice
-- [ ] Mail routing (parse YAML header, copy to inbox)
-- [ ] Expert spawning via `claude -p`
-- [ ] Log capture to `logs/{task-id}.json`
-- [ ] Manual task submission
+- [x] fsnotify watching postoffice
+- [x] Mail routing (parse YAML header, copy to inbox)
+- [x] Expert spawning via `claude -p`
+- [x] Log capture to `logs/{task-id}.json`
+- [x] Manual task submission (write .md to postoffice/)
+
+Next: **v0.2** — MCP + State Management
 
 See `docs/plans/architecture.md` § Implementation Phasing for v0.1–v0.8 roadmap.
 
@@ -88,3 +92,14 @@ See `docs/plans/architecture.md` § Implementation Phasing for v0.1–v0.8 roadm
 - **Config**: TOML for human-edited files, JSON for daemon-managed state
 - **Mail format**: Markdown with YAML frontmatter
 - **Testing**: Integration tests preferred over unit tests
+- **Test plans**: Comment block at top of each test file documenting coverage matrix
+- **Test doubles**: Chicago-school (real objects) by default. London-school (fakes) only at I/O boundaries via interface injection
+
+## Gotchas
+
+- **Message IDs must be filename-safe** — used as filenames in routing and logging. `mail.Parse` rejects path separators, `.`, `..`
+- **At-least-once delivery** — router copies then deletes. Crash = possible duplicate. Experts should be idempotent
+- **Non-zero expert exit preserves inbox file** — stays for retry/inspection. Logs always written regardless of exit code
+- **Daemon drains on startup** — pre-existing postoffice and inbox files are processed when the daemon starts
+- **`Spawner` interface** — `daemon.Daemon` accepts `WithSpawner(s)` for test injection. Use `fakeSpawner` pattern in tests
+- **Architecture doc is source of truth** — `docs/plans/architecture.md`, not external copies
