@@ -95,7 +95,7 @@ func (w *Watcher) Run(ctx context.Context) {
 
 			path := event.Name
 			if err := waitForStable(path); err != nil {
-				w.logger.Warn("File not stable, skipping",
+				w.logger.Warn("Skipping file. Reason: not stable after polling",
 					"path", path,
 					"error", err,
 				)
@@ -113,7 +113,7 @@ func (w *Watcher) Run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			w.logger.Error("Watcher error", "error", err)
+			w.logger.Error("Encountered watcher error", "error", err)
 		}
 	}
 }

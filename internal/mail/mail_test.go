@@ -171,6 +171,20 @@ DotDot.
 `,
 			wantErr: `invalid message ID "..": must be a simple filename`,
 		},
+		{
+			name: "unknown message type",
+			content: `---
+id: task-001
+from: architect
+to: auth
+type: taks
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Typo in type.
+`,
+			wantErr: `unknown message type "taks"`,
+		},
 	}
 
 	for _, tt := range tests {

@@ -62,7 +62,7 @@ func Route(logger *slog.Logger, poolDir, filePath string) (*Message, error) {
 		)
 	}
 
-	logger.Info("Routed message",
+	logger.Info("Successfully routed message",
 		"id", msg.ID,
 		"from", msg.From,
 		"to", msg.To,

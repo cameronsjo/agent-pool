@@ -147,7 +147,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	logger.Info("Spawning expert session",
+	logger.Debug("Preparing to spawn expert session",
 		"expert", cfg.Name,
 		"task_id", cfg.TaskMessage.ID,
 		"model", cfg.Model,
@@ -177,7 +177,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 
 	result.Summary = ExtractSummary(result.Output)
 
-	logger.Info("Expert session completed",
+	logger.Info("Successfully completed expert session",
 		"expert", cfg.Name,
 		"task_id", cfg.TaskMessage.ID,
 		"exit_code", exitCode,

@@ -95,7 +95,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Start watcher goroutine
 	go watcher.Run(ctx)
 
-	d.logger.Info("Daemon started",
+	d.logger.Info("Successfully started daemon",
 		"pool", d.cfg.Pool.Name,
 		"pool_dir", d.poolDir,
 		"experts", len(d.cfg.Experts),
@@ -109,7 +109,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("Daemon shutting down")
+			d.logger.Info("Preparing to shut down daemon")
 			return nil
 
 		case event, ok := <-watcher.Events():
@@ -150,7 +150,7 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 		return
 	}
 
-	d.logger.Info("Message routed",
+	d.logger.Info("Successfully routed message",
 		"id", msg.ID,
 		"to", msg.To,
 	)
@@ -163,7 +163,7 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, _ string) {
 	d.mu.Lock()
 	if d.busy[expertName] {
 		d.mu.Unlock()
-		d.logger.Info("Expert busy, message queued",
+		d.logger.Debug("Skipping expert dispatch. Reason: expert busy",
 			"expert", expertName,
 		)
 		return
@@ -269,7 +269,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		)
 	}
 
-	d.logger.Info("Task completed",
+	d.logger.Info("Successfully completed task",
 		"expert", expertName,
 		"task_id", result.TaskID,
 		"exit_code", result.ExitCode,
@@ -307,6 +307,11 @@ func (d *Daemon) drainInbox(ctx context.Context, expertName string) {
 
 		entries, err := os.ReadDir(inboxDir)
 		if err != nil {
+			d.logger.Error("Failed to read inbox directory",
+				"expert", expertName,
+				"dir", inboxDir,
+				"error", err,
+			)
 			return
 		}
 

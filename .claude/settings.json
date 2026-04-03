@@ -10,7 +10,7 @@
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "echo \"$CLAUDE_FILE_PATH\" | grep -q 'docs/plans/architecture.md' && echo 'BLOCK: Architecture doc requires explicit approval to edit' && exit 1 || exit 0",
+        "command": "case \"$CLAUDE_FILE_PATH\" in */docs/plans/architecture.md) echo 'BLOCK: Architecture doc requires explicit approval to edit' && exit 1 ;; esac; exit 0",
         "description": "Protect architecture doc from accidental edits"
       }
     ]

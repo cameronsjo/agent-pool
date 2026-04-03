@@ -105,6 +105,14 @@ func Parse(content string, sourcePath string) (*Message, error) {
 		return nil, fmt.Errorf("invalid message ID %q: must be a simple filename", msg.ID)
 	}
 
+	// Validate message type against known values
+	switch msg.Type {
+	case TypeTask, TypeQuestion, TypeResponse, TypeNotify, TypeHandoff, TypeCancel:
+		// valid
+	default:
+		return nil, fmt.Errorf("unknown message type %q", msg.Type)
+	}
+
 	if msg.Priority == "" {
 		msg.Priority = PriorityNormal
 	}
