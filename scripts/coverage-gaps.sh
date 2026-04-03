@@ -18,7 +18,7 @@ COVER_PROFILE="${COVER_PROFILE:-coverage.out}"
 
 # Run tests with coverage if profile doesn't exist or is stale
 if [[ ! -f "$COVER_PROFILE" ]] || [[ -n "$(find . -name '*.go' -newer "$COVER_PROFILE" 2>/dev/null | head -1)" ]]; then
-    if ! go test ./... -coverprofile="$COVER_PROFILE" -covermode=atomic 2>&1; then
+    if ! go test -coverprofile="$COVER_PROFILE" -covermode=atomic -coverpkg=./... ./... 2>&1; then
         echo "ERROR: go test failed. Fix test failures before checking coverage." >&2
         exit 1
     fi
