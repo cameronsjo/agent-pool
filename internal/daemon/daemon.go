@@ -123,7 +123,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
 				if expertName != "" {
-					d.handleInbox(ctx, expertName, event.Path)
+					// Dispatch in a goroutine so expert spawns don't
+					// block postoffice routing or other experts.
+					// The busy flag inside handleInbox prevents
+					// concurrent spawns for the same expert.
+					go d.handleInbox(ctx, expertName, event.Path)
 				} else {
 					d.logger.Warn("Received event for unknown inbox",
 						"dir", event.Dir,
@@ -277,9 +281,10 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 }
 
 // drainAllInboxes processes any files sitting in expert inboxes when the daemon starts.
+// Each expert drains in its own goroutine via handleInbox so they run concurrently.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
 	for name := range d.cfg.Experts {
-		d.drainInbox(ctx, name)
+		go d.handleInbox(ctx, name, "")
 	}
 }
 
@@ -289,34 +294,53 @@ func (d *Daemon) drainAllInboxes(ctx context.Context) {
 func (d *Daemon) drainInbox(ctx context.Context, expertName string) {
 	inboxDir := mail.ResolveInbox(d.poolDir, expertName)
 
-	entries, err := os.ReadDir(inboxDir)
-	if err != nil {
-		return
-	}
+	// Track files we've already attempted so we don't loop forever on
+	// non-zero exit files (which are preserved in inbox).
+	seen := make(map[string]bool)
 
-	// Collect .md files, sort by mod time (oldest first = FIFO)
-	var mdFiles []string
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") {
-			mdFiles = append(mdFiles, filepath.Join(inboxDir, entry.Name()))
+	// Re-scan after each batch — messages may arrive while we process.
+	// The loop exits when no unseen .md files remain (or context is cancelled).
+	for {
+		if ctx.Err() != nil {
+			return
 		}
-	}
 
-	if len(mdFiles) == 0 {
-		return
-	}
-
-	sort.Slice(mdFiles, func(i, j int) bool {
-		infoI, _ := os.Stat(mdFiles[i])
-		infoJ, _ := os.Stat(mdFiles[j])
-		if infoI == nil || infoJ == nil {
-			return false
+		entries, err := os.ReadDir(inboxDir)
+		if err != nil {
+			return
 		}
-		return infoI.ModTime().Before(infoJ.ModTime())
-	})
 
-	for _, path := range mdFiles {
-		d.processInboxMessage(ctx, expertName, path)
+		// Collect unseen .md files, sort by mod time (oldest first = FIFO)
+		var mdFiles []string
+		for _, entry := range entries {
+			path := filepath.Join(inboxDir, entry.Name())
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".md") && !seen[path] {
+				mdFiles = append(mdFiles, path)
+			}
+		}
+
+		if len(mdFiles) == 0 {
+			return
+		}
+
+		sort.Slice(mdFiles, func(i, j int) bool {
+			infoI, _ := os.Stat(mdFiles[i])
+			infoJ, _ := os.Stat(mdFiles[j])
+			if infoI == nil || infoJ == nil {
+				return false
+			}
+			return infoI.ModTime().Before(infoJ.ModTime())
+		})
+
+		// Process each file in order. Files that fail to parse are skipped
+		// (left in inbox for manual inspection). Non-zero exits also leave
+		// the file in place but the loop continues to newer items — we
+		// prioritize forward progress over strict FIFO ordering.
+		// Dead-letter handling is v0.3 scope (task board + dependencies).
+		for _, path := range mdFiles {
+			seen[path] = true
+			d.processInboxMessage(ctx, expertName, path)
+		}
 	}
 }
 

@@ -339,6 +339,38 @@ func TestAssemblePrompt_EmptyTaskBody(t *testing.T) {
 	}
 }
 
+func TestAssemblePrompt_NilConfig(t *testing.T) {
+	_, err := expert.AssemblePrompt(nil)
+	if err == nil {
+		t.Fatal("expected error for nil config")
+	}
+}
+
+func TestAppendIndex_SanitizesAllCells(t *testing.T) {
+	dir := t.TempDir()
+	entry := &expert.LogEntry{
+		TaskID:    "task|evil",
+		Timestamp: time.Date(2026, 4, 1, 14, 32, 0, 0, time.UTC),
+		From:      "arch\nitect",
+		ExitCode:  0,
+		Summary:   "normal summary",
+	}
+	if err := expert.AppendIndex(dir, entry); err != nil {
+		t.Fatalf("AppendIndex failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "logs", "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(data)
+	if strings.Contains(content, "task|evil") {
+		t.Error("TaskID pipe should be escaped")
+	}
+	if strings.Contains(content, "arch\nitect") {
+		t.Error("From newline should be collapsed")
+	}
+}
+
 func TestAppendIndex_SanitizesPipeInSummary(t *testing.T) {
 	dir := t.TempDir()
 
@@ -416,6 +448,7 @@ func TestWriteStderr(t *testing.T) {
 //   [x] Happy: all files present (TestAssemblePrompt_AllFiles)
 //   [x] Happy: missing optional files (TestAssemblePrompt_MissingOptionalFiles)
 //   [x] Unhappy: no task message (TestAssemblePrompt_NoTaskMessage)
+//   [x] Unhappy: nil config (TestAssemblePrompt_NilConfig)
 //   [x] Boundary: empty files (exist but whitespace-only) (TestAssemblePrompt_EmptyFiles)
 //   [x] Boundary: empty task body (TestAssemblePrompt_EmptyTaskBody)
 //
@@ -439,3 +472,4 @@ func TestWriteStderr(t *testing.T) {
 //   [x] Happy: creates and appends entries (TestAppendIndex)
 //   [x] Boundary: sanitizes pipe characters (TestAppendIndex_SanitizesPipeInSummary)
 //   [x] Boundary: sanitizes newlines (TestAppendIndex_SanitizesNewlineInSummary)
+//   [x] Boundary: sanitizes all cells (TestAppendIndex_SanitizesAllCells)

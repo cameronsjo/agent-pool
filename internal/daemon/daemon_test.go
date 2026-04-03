@@ -81,7 +81,7 @@ model = "sonnet"
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	d := daemon.New(cfg, poolDir, logger)
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(&fakeSpawner{}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

@@ -18,7 +18,10 @@ COVER_PROFILE="${COVER_PROFILE:-coverage.out}"
 
 # Run tests with coverage if profile doesn't exist or is stale
 if [[ ! -f "$COVER_PROFILE" ]] || [[ -n "$(find . -name '*.go' -newer "$COVER_PROFILE" 2>/dev/null | head -1)" ]]; then
-    go test ./... -coverprofile="$COVER_PROFILE" -covermode=atomic > /dev/null 2>&1
+    if ! go test ./... -coverprofile="$COVER_PROFILE" -covermode=atomic 2>&1; then
+        echo "ERROR: go test failed. Fix test failures before checking coverage." >&2
+        exit 1
+    fi
 fi
 
 # Parse coverage output
@@ -68,7 +71,7 @@ echo ""
 printf "  %-55s %-30s %s\n" "FILE" "FUNCTION" "COVERAGE"
 printf "  %-55s %-30s %s\n" "----" "--------" "--------"
 # Sort by coverage ascending (numeric on last field)
-echo "$GAPS" | sort -t'%' -k1 -n | while IFS= read -r line; do
+echo "$GAPS" | awk '{pct=$NF; gsub(/%/,"",pct); print pct, $0}' | sort -n | sed 's/^[^ ]* //' | while IFS= read -r line; do
     echo "$line"
 done
 echo ""

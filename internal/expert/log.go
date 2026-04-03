@@ -20,6 +20,13 @@ type LogEntry struct {
 
 const indexHeader = "| Task ID | Timestamp | From | Exit | Summary |\n|---------|-----------|------|-----:|---------|\n"
 
+// sanitizeCell escapes characters that break markdown table cells.
+func sanitizeCell(s string) string {
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", "\\|")
+	return s
+}
+
 // WriteLog writes raw session output to logs/{task-id}.json.
 func WriteLog(expertDir string, taskID string, output []byte) error {
 	logsDir := filepath.Join(expertDir, "logs")
@@ -62,16 +69,12 @@ func AppendIndex(expertDir string, entry *LogEntry) error {
 		}
 	}
 
-	// Sanitize summary for table cell (collapse newlines, escape pipes)
-	summary := strings.ReplaceAll(entry.Summary, "\n", " ")
-	summary = strings.ReplaceAll(summary, "|", "\\|")
-
 	row := fmt.Sprintf("| %s | %s | %s | %d | %s |\n",
-		entry.TaskID,
+		sanitizeCell(entry.TaskID),
 		entry.Timestamp.UTC().Format(time.RFC3339),
-		entry.From,
+		sanitizeCell(entry.From),
 		entry.ExitCode,
-		summary,
+		sanitizeCell(entry.Summary),
 	)
 
 	if _, err := f.WriteString(row); err != nil {

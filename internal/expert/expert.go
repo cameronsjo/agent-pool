@@ -45,6 +45,10 @@ type Result struct {
 // Sections are included in order: identity, state, errors, task.
 // Missing state files are silently skipped — a new expert may not have all files yet.
 func AssemblePrompt(cfg *SpawnConfig) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("spawn config is nil")
+	}
+
 	var b strings.Builder
 
 	// Identity
@@ -105,6 +109,10 @@ func AssemblePrompt(cfg *SpawnConfig) (string, error) {
 // are captured separately. Environment variables AGENT_POOL_EXPERT and
 // AGENT_POOL_TASK_ID are set for the session.
 func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("spawn config is nil")
+	}
+
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
 		return nil, fmt.Errorf("claude binary not found in PATH: %w", err)
