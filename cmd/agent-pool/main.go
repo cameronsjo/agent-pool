@@ -173,8 +173,12 @@ func cmdGuard() {
 
 // parseFlags extracts named --flag value pairs from os.Args[start:].
 func parseFlags(start int, names ...string) map[string]string {
+	return parseFlagsFromArgs(os.Args[start:], names...)
+}
+
+// parseFlagsFromArgs extracts named --flag value pairs from an args slice.
+func parseFlagsFromArgs(args []string, names ...string) map[string]string {
 	result := make(map[string]string, len(names))
-	args := os.Args[start:]
 
 	for i := 0; i < len(args)-1; i++ {
 		for _, name := range names {
