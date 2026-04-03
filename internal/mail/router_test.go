@@ -1,0 +1,111 @@
+package mail_test
+
+import (
+	"log/slog"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"git.sjo.lol/cameron/agent-pool/internal/mail"
+)
+
+func TestResolveInbox_BuiltinRoles(t *testing.T) {
+	tests := []struct {
+		recipient string
+		want      string
+	}{
+		{"architect", "/pool/architect/inbox"},
+		{"researcher", "/pool/researcher/inbox"},
+		{"concierge", "/pool/concierge/inbox"},
+	}
+
+	for _, tt := range tests {
+		got := mail.ResolveInbox("/pool", tt.recipient)
+		if got != tt.want {
+			t.Errorf("ResolveInbox(%q) = %q, want %q", tt.recipient, got, tt.want)
+		}
+	}
+}
+
+func TestResolveInbox_Experts(t *testing.T) {
+	got := mail.ResolveInbox("/pool", "auth")
+	want := "/pool/experts/auth/inbox"
+	if got != want {
+		t.Errorf("ResolveInbox(%q) = %q, want %q", "auth", got, want)
+	}
+}
+
+func TestRoute_EndToEnd(t *testing.T) {
+	poolDir := t.TempDir()
+
+	// Set up directory structure
+	postoffice := filepath.Join(poolDir, "postoffice")
+	inbox := filepath.Join(poolDir, "experts", "auth", "inbox")
+	for _, dir := range []string{postoffice, inbox} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Write a message to the postoffice
+	msgContent := `---
+id: task-099
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Do the thing.
+`
+	srcPath := filepath.Join(postoffice, "task-099.md")
+	if err := os.WriteFile(srcPath, []byte(msgContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	msg, err := mail.Route(logger, poolDir, srcPath)
+	if err != nil {
+		t.Fatalf("Route failed: %v", err)
+	}
+
+	if msg.ID != "task-099" {
+		t.Errorf("msg.ID = %q, want %q", msg.ID, "task-099")
+	}
+
+	// Verify file appeared in inbox (named by message ID)
+	destPath := filepath.Join(inbox, "task-099.md")
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		t.Error("routed file not found in inbox")
+	}
+
+	// Verify original was deleted
+	if _, err := os.Stat(srcPath); !os.IsNotExist(err) {
+		t.Error("original file should have been deleted from postoffice")
+	}
+}
+
+func TestRoute_UnknownRecipient(t *testing.T) {
+	poolDir := t.TempDir()
+	postoffice := filepath.Join(poolDir, "postoffice")
+	os.MkdirAll(postoffice, 0o755)
+
+	msgContent := `---
+id: task-100
+from: architect
+to: nonexistent
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+This should fail.
+`
+	srcPath := filepath.Join(postoffice, "task-100.md")
+	os.WriteFile(srcPath, []byte(msgContent), 0o644)
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	_, err := mail.Route(logger, poolDir, srcPath)
+	if err == nil {
+		t.Fatal("expected error for unknown recipient")
+	}
+}
