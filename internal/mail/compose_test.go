@@ -4,6 +4,7 @@
 //   - Round-trip: Compose → Parse recovers same fields
 //   - Missing required fields → error for each
 //   - Nil message → error
+//   - Invalid ID (path traversal, dot, slash) → error
 //   - Default priority applied when empty
 //   - Default timestamp applied when zero
 //   - Body with special characters (pipes, dashes) survives round-trip
@@ -237,6 +238,33 @@ func TestCompose_OmitsCancelsWhenEmpty(t *testing.T) {
 
 	if strings.Contains(composed, "cancels") {
 		t.Errorf("composed output should omit empty cancels field:\n%s", composed)
+	}
+}
+
+func TestCompose_InvalidID(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+	}{
+		{"path separator", "../../etc/passwd"},
+		{"dot", "."},
+		{"dot-dot", ".."},
+		{"slash", "foo/bar"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := &mail.Message{
+				ID:   tc.id,
+				From: "arch",
+				To:   "auth",
+				Type: mail.TypeTask,
+				Body: "test",
+			}
+			_, err := mail.Compose(msg)
+			if err == nil {
+				t.Errorf("Compose(%q) should return error", tc.id)
+			}
+		})
 	}
 }
 

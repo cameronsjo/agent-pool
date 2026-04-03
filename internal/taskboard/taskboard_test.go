@@ -16,6 +16,7 @@
 // Persistence:
 //   - Save + Load roundtrip: marshal, unmarshal, verify fields
 //   - Load missing file: returns empty board, no error
+//   - Load null tasks: initializes map, no error
 //   - Save atomic: temp file cleaned up after rename
 //
 // DAG Evaluator:
@@ -39,6 +40,7 @@ package taskboard
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +86,9 @@ func TestBoard_AddDuplicate(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for duplicate ID, got nil")
 	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error should mention 'already exists', got: %v", err)
+	}
 }
 
 func TestBoard_AddEmptyID(t *testing.T) {
@@ -91,6 +96,9 @@ func TestBoard_AddEmptyID(t *testing.T) {
 	err := b.Add(&Task{Status: StatusPending})
 	if err == nil {
 		t.Fatal("expected error for empty ID, got nil")
+	}
+	if !strings.Contains(err.Error(), "required") {
+		t.Errorf("error should mention 'required', got: %v", err)
 	}
 }
 
@@ -139,6 +147,9 @@ func TestBoard_UpdateMissing(t *testing.T) {
 	err := b.Update("nonexistent", func(t *Task) {})
 	if err == nil {
 		t.Fatal("expected error for missing task, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
 	}
 }
 
@@ -222,6 +233,23 @@ func TestBoard_SaveAndLoad(t *testing.T) {
 	}
 	if loaded.Version != 1 {
 		t.Errorf("Version = %d, want 1", loaded.Version)
+	}
+}
+
+func TestBoard_LoadNullTasks(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "taskboard.json")
+	os.WriteFile(path, []byte(`{"version":1,"tasks":null}`), 0o644)
+
+	b, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if b.Tasks == nil {
+		t.Fatal("Tasks map should be initialized, not nil")
+	}
+	if len(b.Tasks) != 0 {
+		t.Errorf("Tasks = %d, want 0", len(b.Tasks))
 	}
 }
 
@@ -508,5 +536,8 @@ func TestBoard_RecordHandoffMissing(t *testing.T) {
 	err := b.RecordHandoff("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for missing task, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error should mention 'not found', got: %v", err)
 	}
 }

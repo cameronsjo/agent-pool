@@ -342,27 +342,34 @@ func assertSliceEqual(t *testing.T, field string, expected []string, actual []st
 }
 
 func TestDefaultsSection_ParseSessionTimeout(t *testing.T) {
-	d := config.DefaultsSection{SessionTimeout: "10m"}
-	dur, err := d.ParseSessionTimeout()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name    string
+		input   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"10 minutes", "10m", 10 * time.Minute, false},
+		{"30 seconds", "30s", 30 * time.Second, false},
+		{"1 hour", "1h", time.Hour, false},
+		{"invalid", "invalid", 0, true},
+		{"empty", "", 0, true},
 	}
-	if dur != 10*time.Minute {
-		t.Errorf("expected 10m, got %v", dur)
-	}
-
-	d2 := config.DefaultsSection{SessionTimeout: "30s"}
-	dur2, err := d2.ParseSessionTimeout()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if dur2 != 30*time.Second {
-		t.Errorf("expected 30s, got %v", dur2)
-	}
-
-	d3 := config.DefaultsSection{SessionTimeout: "invalid"}
-	_, err = d3.ParseSessionTimeout()
-	if err == nil {
-		t.Fatal("expected error for invalid duration")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := config.DefaultsSection{SessionTimeout: tc.input}
+			got, err := d.ParseSessionTimeout()
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("ParseSessionTimeout(%q) expected error", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseSessionTimeout(%q) unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseSessionTimeout(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }

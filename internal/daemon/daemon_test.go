@@ -1,3 +1,31 @@
+// Test plan for internal/daemon:
+//
+// Lifecycle:
+//   - EnsureDirsAndRouting: dirs created, message routed, postoffice cleaned
+//   - HandleInboxWithFakeSpawner: spawn called, log written, inbox cleaned
+//   - ExpertBusyQueuesMessage: second message queued while first blocks, both processed
+//   - ResolveExpertConfig: expert-level model overrides pool default
+//   - NonZeroExitPreservesInbox: log written, inbox preserved on failure
+//   - DrainPostoffice: pre-existing message routed on startup
+//   - SessionTimeoutCancelsSpawn: spawn cancelled, inbox preserved, no log
+//
+// Taskboard:
+//   - TaskboardCreatedOnStart: taskboard.json written with routed task
+//   - TaskStatusLifecycle: pending → active → completed, timestamps/exit/meta fields set
+//   - TaskFailedTrackedInTaskboard: status=failed, exit_code=1
+//   - BlockedTaskNotSpawned: depends-on blocks spawn, status=blocked
+//   - CycleRejectedOnRegister: mutual depends-on rejects second task, neither spawned
+//   - DuplicateTaskIDIgnored: second task with same ID not added, expert spawned once
+//
+// Cancel:
+//   - CancelPendingTask: blocked task cancelled, inbox removed, expert not spawned
+//   - CancelActiveTask: cancel_note set, task completes normally
+//   - CancelCompletedTaskIsNoop: completed task unchanged by cancel
+//   - CancelMissingCancelsField: no crash, no spawn, taskboard empty
+//
+// Handoff:
+//   - HandoffIncrementsCount: handoff_count=1, needs_attention=false
+//   - HandoffEscalation: handoff_count=2, needs_attention=true
 package daemon_test
 
 import (
@@ -713,6 +741,18 @@ project_dir = "` + poolDir + `"
 	if task.CompletedAt == nil {
 		t.Error("CompletedAt should be set")
 	}
+	if task.Expert != "auth" {
+		t.Errorf("Expert = %q, want %q", task.Expert, "auth")
+	}
+	if task.From != "architect" {
+		t.Errorf("From = %q, want %q", task.From, "architect")
+	}
+	if task.Type != "task" {
+		t.Errorf("Type = %q, want %q", task.Type, "task")
+	}
+	if task.Priority != "normal" {
+		t.Errorf("Priority = %q, want %q", task.Priority, "normal")
+	}
 
 	shutdownDaemon(t, cancel, errCh)
 }
@@ -1261,5 +1301,359 @@ model = "sonnet"
 	}
 
 	close(gate)
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_CycleRejectedOnRegister(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Route task-A that depends on task-B
+	msgA := `---
+id: task-A
+from: architect
+to: auth
+type: task
+depends-on: [task-B]
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Task A depends on B.
+`
+	os.WriteFile(filepath.Join(postDir, "task-A.md"), []byte(msgA), 0o644)
+
+	// Wait for task-A to be routed and registered
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(poolDir, "taskboard.json")); err == nil {
+			b := loadTaskboard(t, poolDir)
+			if _, ok := b.Tasks["task-A"]; ok {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Route task-B that depends on task-A — creates a cycle
+	msgB := `---
+id: task-B
+from: architect
+to: auth
+type: task
+depends-on: [task-A]
+timestamp: 2026-04-01T14:33:00Z
+---
+
+Task B depends on A (cycle).
+`
+	os.WriteFile(filepath.Join(postDir, "task-B.md"), []byte(msgB), 0o644)
+
+	// Wait for task-B to be processed (postoffice file removed)
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(postDir, "task-B.md")); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Allow processing time
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: task-A is in the taskboard as blocked
+	board := loadTaskboard(t, poolDir)
+	taskA, okA := board.Tasks["task-A"]
+	if !okA {
+		t.Fatal("task-A not found in taskboard")
+	}
+	if taskA.Status != "blocked" {
+		t.Errorf("task-A Status = %q, want %q", taskA.Status, "blocked")
+	}
+
+	// task-B is rejected by registerTask (cycle detected), but the routed
+	// inbox file still exists. When the inbox is drained, ensureTaskRegistered
+	// adds it as blocked (no cycle check on that path). Both end up blocked.
+	taskB, okB := board.Tasks["task-B"]
+	if !okB {
+		t.Fatal("task-B not found in taskboard (added via ensureTaskRegistered)")
+	}
+	if taskB.Status != "blocked" {
+		t.Errorf("task-B Status = %q, want %q", taskB.Status, "blocked")
+	}
+
+	// Verify: expert was never spawned for either task (both blocked)
+	calls := fake.getCalls()
+	for _, c := range calls {
+		if c.TaskMessage.ID == "task-A" || c.TaskMessage.ID == "task-B" {
+			t.Errorf("expert should not have been spawned for %s", c.TaskMessage.ID)
+		}
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_CancelCompletedTaskIsNoop(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Route a task and let it complete
+	writeMessage(t, postDir, "task-done-001", "architect", "auth")
+
+	// Poll for spawn completion
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Allow post-spawn processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Confirm task is completed
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-done-001"]
+	if !ok {
+		t.Fatal("task-done-001 not found in taskboard")
+	}
+	if task.Status != "completed" {
+		t.Fatalf("Status = %q, want %q (task must be completed before cancel test)", task.Status, "completed")
+	}
+
+	// Send a cancel targeting the completed task
+	cancelPath := writeCancelMessage(t, postDir, "cancel-done-001", "task-done-001", "architect", "auth")
+
+	// Wait for cancel file to be consumed from postoffice
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(cancelPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: task is still completed, no cancel_note, no status change
+	board = loadTaskboard(t, poolDir)
+	task, ok = board.Tasks["task-done-001"]
+	if !ok {
+		t.Fatal("task-done-001 disappeared from taskboard after cancel")
+	}
+	if task.Status != "completed" {
+		t.Errorf("Status = %q, want %q (should remain completed)", task.Status, "completed")
+	}
+	if task.CancelNote != "" {
+		t.Errorf("CancelNote = %q, want empty (cancel of completed task is a no-op)", task.CancelNote)
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_CancelMissingCancelsField(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Write a cancel message with no cancels field
+	cancelContent := `---
+id: cancel-empty
+from: architect
+to: auth
+type: cancel
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Cancel without target.
+`
+	cancelPath := filepath.Join(postDir, "cancel-empty.md")
+	os.WriteFile(cancelPath, []byte(cancelContent), 0o644)
+
+	// Wait for cancel file to be consumed from postoffice
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(cancelPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(cancelPath); !os.IsNotExist(err) {
+		t.Error("cancel file should have been removed from postoffice")
+	}
+
+	// Allow any processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: no crashes (daemon still running), expert never spawned, taskboard empty
+	if len(fake.getCalls()) != 0 {
+		t.Errorf("expected 0 spawn calls, got %d", len(fake.getCalls()))
+	}
+
+	// Taskboard should either not exist or be empty
+	boardPath := filepath.Join(poolDir, "taskboard.json")
+	if _, err := os.Stat(boardPath); err == nil {
+		board := loadTaskboard(t, poolDir)
+		if len(board.Tasks) != 0 {
+			t.Errorf("expected empty taskboard, got %d tasks", len(board.Tasks))
+		}
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_DuplicateTaskIDIgnored(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Route first task
+	writeMessage(t, postDir, "task-dup-001", "architect", "auth")
+
+	// Wait for it to be registered in taskboard
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(filepath.Join(poolDir, "taskboard.json")); err == nil {
+			b := loadTaskboard(t, poolDir)
+			if _, ok := b.Tasks["task-dup-001"]; ok {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Wait for first spawn to complete
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Allow post-spawn processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Route the same task ID again
+	writeMessage(t, postDir, "task-dup-001", "architect", "auth")
+
+	// Wait for the duplicate to be processed (postoffice file removed)
+	dupPath := filepath.Join(postDir, "task-dup-001.md")
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(dupPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Allow processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: taskboard still has exactly one entry
+	board := loadTaskboard(t, poolDir)
+	if _, ok := board.Tasks["task-dup-001"]; !ok {
+		t.Fatal("task-dup-001 should still be in taskboard")
+	}
+
+	// Verify: expert spawned exactly once
+	calls := fake.getCalls()
+	spawnCount := 0
+	for _, c := range calls {
+		if c.TaskMessage.ID == "task-dup-001" {
+			spawnCount++
+		}
+	}
+	if spawnCount != 1 {
+		t.Errorf("expected 1 spawn for task-dup-001, got %d", spawnCount)
+	}
+
 	shutdownDaemon(t, cancel, errCh)
 }
