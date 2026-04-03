@@ -122,18 +122,20 @@ Test routing.
 		t.Fatal(err)
 	}
 
-	// Poll for the file to appear in auth's inbox
-	inboxPath := filepath.Join(poolDir, "experts", "auth", "inbox", "task-routing-test.md")
+	// Poll for evidence of processing — the log file is the durable artifact.
+	// The inbox file is transient (removed on success), so polling for it is
+	// racy when expert dispatch runs in a goroutine.
+	logPath := filepath.Join(poolDir, "experts", "auth", "logs", "task-routing-test.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(inboxPath); err == nil {
+		if _, err := os.Stat(logPath); err == nil {
 			break
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if _, err := os.Stat(inboxPath); os.IsNotExist(err) {
-		t.Error("message was not routed to auth inbox")
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Error("message was not routed and processed (log file missing)")
 	}
 
 	// Verify original was cleaned up from postoffice

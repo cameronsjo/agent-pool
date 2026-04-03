@@ -48,4 +48,4 @@ timestamp: {UTC ISO 8601}
 - Expert name must be non-empty and filename-safe
 - Body must be non-empty
 - Pool directory must exist and contain a `postoffice/` subdirectory
-- Message type must be one of: task, question, notify, cancel
+- Message type must be one of: task, question, response, notify, handoff, cancel

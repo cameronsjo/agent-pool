@@ -3,7 +3,7 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "goimports -w \"$CLAUDE_FILE_PATH\" 2>/dev/null; true",
+        "command": "case \"$CLAUDE_FILE_PATH\" in *.go) command -v goimports >/dev/null 2>&1 && goimports -w \"$CLAUDE_FILE_PATH\" ;; esac",
         "description": "Auto-format Go files on edit"
       }
     ],
