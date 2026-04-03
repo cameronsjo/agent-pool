@@ -18,6 +18,9 @@ import (
 
 // RegisterExpertTools adds all expert-scope tools to the MCP server.
 func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
+	if cfg == nil {
+		return
+	}
 	expertDir := filepath.Join(cfg.PoolDir, "experts", cfg.ExpertName)
 
 	srv.AddTool(

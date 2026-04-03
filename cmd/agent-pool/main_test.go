@@ -1,3 +1,14 @@
+// Test plan for main.go:
+//
+// parseFlagsFromArgs:
+//   - All flags present → returns all values
+//   - Some flags missing → missing flags return empty string
+//   - Empty args → returns empty map
+//   - Three flags → all parsed correctly
+//   - Unknown flags → ignored
+//   - Flag at end with no value → ignored
+//   - Repeated flag → last value wins
+
 package main
 
 import (

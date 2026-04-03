@@ -34,7 +34,7 @@ echo "$FUNC_OUTPUT" | grep "^total:" | awk '{printf "  Total: %s\n", $NF}'
 echo ""
 
 # Show per-package totals from test output
-go test ./... -cover 2>/dev/null | while IFS= read -r line; do
+go test -coverpkg=./... ./... -cover 2>/dev/null | while IFS= read -r line; do
     if [[ "$line" == ok* ]] && [[ "$line" == *"coverage:"* ]]; then
         pkg=$(echo "$line" | awk '{print $2}')
         cov=$(echo "$line" | grep -oE '[0-9]+\.[0-9]+%')

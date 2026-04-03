@@ -27,11 +27,17 @@ type FlushConfig struct {
 // happen via MCP tools during the session; this just catches the case where
 // the expert forgot to update state.
 func Flush(logger *slog.Logger, cfg *FlushConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("flush config is nil")
+	}
 	if cfg.PoolDir == "" {
 		return fmt.Errorf("pool directory is required")
 	}
 	if cfg.ExpertName == "" {
 		return fmt.Errorf("expert name is required")
+	}
+	if cfg.ExpertName != filepath.Base(cfg.ExpertName) {
+		return fmt.Errorf("invalid expert name %q: must not contain path separators", cfg.ExpertName)
 	}
 
 	expertDir := filepath.Join(cfg.PoolDir, "experts", cfg.ExpertName)

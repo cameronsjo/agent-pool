@@ -7,6 +7,7 @@ CMD_DIR    := cmd/agent-pool
 GO         := go
 GOFLAGS    :=
 LDFLAGS    := -s -w
+COVERAGE_THRESHOLD ?= 65
 
 ## ─── Default ─────────────────────────────────────────────────────────────────
 
@@ -34,8 +35,6 @@ run: build
 ## Run with go run (no binary, faster iteration)
 dev:
 	$(GO) run ./$(CMD_DIR) start $(POOL)
-
-COVERAGE_THRESHOLD ?= 65
 
 ## ─── Testing ─────────────────────────────────────────────────────────────────
 

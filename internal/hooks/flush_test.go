@@ -27,8 +27,12 @@ func testLogger() *slog.Logger {
 func TestFlush_RecentState(t *testing.T) {
 	poolDir := t.TempDir()
 	expertDir := filepath.Join(poolDir, "experts", "auth")
-	os.MkdirAll(expertDir, 0o755)
-	os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("fresh state"), 0o644)
+	if err := os.MkdirAll(expertDir, 0o755); err != nil {
+		t.Fatalf("creating expert dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("fresh state"), 0o644); err != nil {
+		t.Fatalf("writing state.md: %v", err)
+	}
 
 	cfg := &hooks.FlushConfig{
 		PoolDir:    poolDir,
@@ -45,7 +49,9 @@ func TestFlush_RecentState(t *testing.T) {
 func TestFlush_MissingState(t *testing.T) {
 	poolDir := t.TempDir()
 	expertDir := filepath.Join(poolDir, "experts", "auth")
-	os.MkdirAll(expertDir, 0o755)
+	if err := os.MkdirAll(expertDir, 0o755); err != nil {
+		t.Fatalf("creating expert dir: %v", err)
+	}
 	// No state.md
 
 	cfg := &hooks.FlushConfig{
@@ -63,14 +69,20 @@ func TestFlush_MissingState(t *testing.T) {
 func TestFlush_StaleState(t *testing.T) {
 	poolDir := t.TempDir()
 	expertDir := filepath.Join(poolDir, "experts", "auth")
-	os.MkdirAll(expertDir, 0o755)
+	if err := os.MkdirAll(expertDir, 0o755); err != nil {
+		t.Fatalf("creating expert dir: %v", err)
+	}
 
 	statePath := filepath.Join(expertDir, "state.md")
-	os.WriteFile(statePath, []byte("old state"), 0o644)
+	if err := os.WriteFile(statePath, []byte("old state"), 0o644); err != nil {
+		t.Fatalf("writing state.md: %v", err)
+	}
 
 	// Set mtime to 2 hours ago
 	oldTime := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(statePath, oldTime, oldTime)
+	if err := os.Chtimes(statePath, oldTime, oldTime); err != nil {
+		t.Fatalf("setting mtime: %v", err)
+	}
 
 	cfg := &hooks.FlushConfig{
 		PoolDir:    poolDir,

@@ -1,3 +1,10 @@
+// Test plan for server.go:
+//
+// ServerConfig.Validate:
+//   - Happy path → no error
+//   - Empty pool dir → error mentioning "pool directory"
+//   - Empty expert name → error mentioning "expert name"
+
 package mcp_test
 
 import (

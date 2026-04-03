@@ -2,6 +2,7 @@ package mail
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,6 +18,9 @@ func Compose(msg *Message) (string, error) {
 	}
 	if msg.ID == "" {
 		return "", fmt.Errorf("missing required field: id")
+	}
+	if msg.ID != filepath.Base(msg.ID) || msg.ID == "." || msg.ID == ".." {
+		return "", fmt.Errorf("invalid message ID %q: must be a simple filename", msg.ID)
 	}
 	if msg.From == "" {
 		return "", fmt.Errorf("missing required field: from")

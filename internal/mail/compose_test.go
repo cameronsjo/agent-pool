@@ -26,6 +26,7 @@ func TestCompose_RoundTrip(t *testing.T) {
 		To:        "auth",
 		Type:      mail.TypeTask,
 		Contracts: []string{"contract-007"},
+		DependsOn: []string{"task-041"},
 		Priority:  mail.PriorityHigh,
 		Timestamp: time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC),
 		Body:      "Build the token endpoint.",
@@ -61,6 +62,9 @@ func TestCompose_RoundTrip(t *testing.T) {
 	}
 	if len(parsed.Contracts) != 1 || parsed.Contracts[0] != "contract-007" {
 		t.Errorf("Contracts = %v, want [contract-007]", parsed.Contracts)
+	}
+	if len(parsed.DependsOn) != 1 || parsed.DependsOn[0] != "task-041" {
+		t.Errorf("DependsOn = %v, want [task-041]", parsed.DependsOn)
 	}
 }
 

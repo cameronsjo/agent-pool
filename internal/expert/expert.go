@@ -110,6 +110,9 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	if cfg == nil {
 		return nil, fmt.Errorf("spawn config is nil")
 	}
+	if cfg.PoolDir == "" {
+		return nil, fmt.Errorf("pool directory is required")
+	}
 
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {

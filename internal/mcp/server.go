@@ -36,6 +36,9 @@ func (c *ServerConfig) Validate() error {
 // is received. Tool handlers read/write state files and mail in the pool
 // directory. Logs go to stderr (stdout is the MCP transport).
 func Run(ctx context.Context, cfg *ServerConfig) error {
+	if cfg == nil {
+		return fmt.Errorf("server config is nil")
+	}
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("invalid config: %w", err)
 	}

@@ -208,7 +208,14 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		)
 		return false
 	}
-	defer os.Remove(mcpConfigPath)
+	defer func() {
+		if err := os.Remove(mcpConfigPath); err != nil && !os.IsNotExist(err) {
+			d.logger.Warn("Failed to remove MCP config temp file",
+				"path", mcpConfigPath,
+				"error", err,
+			)
+		}
+	}()
 
 	cfg := &expert.SpawnConfig{
 		Name:          expertName,

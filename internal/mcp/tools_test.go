@@ -50,9 +50,15 @@ func setupTestPool(t *testing.T, expertName string) (poolDir string, expertDir s
 	t.Helper()
 	poolDir = t.TempDir()
 	expertDir = filepath.Join(poolDir, "experts", expertName)
-	os.MkdirAll(expertDir, 0o755)
-	os.MkdirAll(filepath.Join(expertDir, "logs"), 0o755)
-	os.MkdirAll(filepath.Join(poolDir, "postoffice"), 0o755)
+	if err := os.MkdirAll(expertDir, 0o755); err != nil {
+		t.Fatalf("creating expert dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(expertDir, "logs"), 0o755); err != nil {
+		t.Fatalf("creating logs dir: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(poolDir, "postoffice"), 0o755); err != nil {
+		t.Fatalf("creating postoffice dir: %v", err)
+	}
 	return poolDir, expertDir
 }
 
