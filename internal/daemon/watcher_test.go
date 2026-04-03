@@ -90,3 +90,108 @@ func TestWatcher_IgnoresNonMDFiles(t *testing.T) {
 		// Expected — no event for .txt
 	}
 }
+
+func TestWatcher_IgnoresRoutingTempFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	w, err := daemon.NewWatcher(logger)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	defer w.Close()
+
+	if err := w.Add(dir); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	go w.Run(ctx)
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Write a .routing- temp file — should be ignored
+	os.WriteFile(filepath.Join(dir, ".routing-abc123.md"), []byte("temp routing file"), 0o644)
+
+	select {
+	case event := <-w.Events():
+		t.Errorf("unexpected event for .routing- temp file: %v", event)
+	case <-time.After(1 * time.Second):
+		// Expected — no event for .routing-* files
+	}
+}
+
+func TestWatcher_MultipleDirectories(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	w, err := daemon.NewWatcher(logger)
+	if err != nil {
+		t.Fatalf("NewWatcher: %v", err)
+	}
+	defer w.Close()
+
+	if err := w.Add(dir1); err != nil {
+		t.Fatalf("Add dir1: %v", err)
+	}
+	if err := w.Add(dir2); err != nil {
+		t.Fatalf("Add dir2: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	go w.Run(ctx)
+
+	time.Sleep(50 * time.Millisecond)
+
+	absDir1, err := filepath.Abs(dir1)
+	if err != nil {
+		t.Fatalf("Abs dir1: %v", err)
+	}
+	absDir2, err := filepath.Abs(dir2)
+	if err != nil {
+		t.Fatalf("Abs dir2: %v", err)
+	}
+
+	// Write a .md file to dir1
+	path1 := filepath.Join(dir1, "task-from-dir1.md")
+	if err := os.WriteFile(path1, []byte("---\nid: task-dir1\n---\nFrom dir1.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case event := <-w.Events():
+		if event.Dir != absDir1 {
+			t.Errorf("event.Dir = %q, want %q", event.Dir, absDir1)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event from dir1")
+	}
+
+	// Write a .md file to dir2
+	path2 := filepath.Join(dir2, "task-from-dir2.md")
+	if err := os.WriteFile(path2, []byte("---\nid: task-dir2\n---\nFrom dir2.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case event := <-w.Events():
+		if event.Dir != absDir2 {
+			t.Errorf("event.Dir = %q, want %q", event.Dir, absDir2)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event from dir2")
+	}
+}
+
+// Test Plan for watcher.go
+//
+// Watcher (Classification: STATE MACHINE + I/O BOUNDARY)
+//   [x] Happy: detects new .md file (TestWatcher_DetectsNewMDFile)
+//   [x] Behavioral: ignores non-.md files (TestWatcher_IgnoresNonMDFiles)
+//   [x] Behavioral: ignores .routing-* temp files (TestWatcher_IgnoresRoutingTempFiles)
+//   [x] Behavioral: multiple directories (TestWatcher_MultipleDirectories)

@@ -117,6 +117,9 @@ func ExtractSummary(output []byte) string {
 
 	// Collapse whitespace and truncate
 	lastResult = strings.Join(strings.Fields(lastResult), " ")
+	if lastResult == "" {
+		return fallback
+	}
 	if len(lastResult) > maxLen {
 		lastResult = lastResult[:maxLen] + "..."
 	}

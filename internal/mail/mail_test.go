@@ -207,3 +207,145 @@ func TestParseFile_NotFound(t *testing.T) {
 		t.Fatal("expected error for missing file")
 	}
 }
+
+// Test Plan for mail.go
+//
+// Parse (Classification: INPUT PARSER)
+//   [x] Happy: valid message with all fields (TestParse_ValidMessage)
+//   [x] Happy: default priority when omitted (TestParse_DefaultPriority)
+//   [x] Unhappy: missing each required field (TestParse_MissingRequiredField)
+//   [x] Unhappy: malformed YAML (TestParse_MalformedYAML)
+//   [x] Unhappy: no frontmatter (TestParse_NoFrontmatter)
+//   [x] Boundary: empty body (TestParse_EmptyBody)
+//   [x] Unhappy: missing from field (TestParse_MissingFrom)
+//   [x] Boundary: leading whitespace before frontmatter (TestParse_LeadingWhitespace)
+//   [x] Boundary: only opening delimiter (TestParse_OnlyOpeningDelimiter)
+//   [x] Happy: unknown fields are ignored (TestParse_UnknownFieldsIgnored)
+//   [x] Boundary: all message types parse correctly (TestParse_AllMessageTypes)
+//   [x] Invalid: opening delimiter with trailing text (TestParse_DelimiterTrailingText)
+//   [ ] Fuzz: Parse accepts arbitrary string input — candidate for go fuzzing
+//
+// ParseFile (Classification: I/O BOUNDARY)
+//   [x] Happy: reads and parses file (TestParseFile)
+//   [x] Unhappy: file not found (TestParseFile_NotFound)
+
+func TestParse_MissingFrom(t *testing.T) {
+	content := `---
+id: task-001
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Do something.
+`
+	_, err := mail.Parse(content, "")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if got := err.Error(); got != "missing required field: from" {
+		t.Errorf("error = %q, want %q", got, "missing required field: from")
+	}
+}
+
+func TestParse_LeadingWhitespace(t *testing.T) {
+	content := `
+---
+id: task-ws
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Body after whitespace.
+`
+	msg, err := mail.Parse(content, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.ID != "task-ws" {
+		t.Errorf("ID = %q, want %q", msg.ID, "task-ws")
+	}
+}
+
+func TestParse_OnlyOpeningDelimiter(t *testing.T) {
+	content := `---
+id: task-001
+from: architect
+to: auth
+type: task
+`
+	_, err := mail.Parse(content, "")
+	if err == nil {
+		t.Fatal("expected error for missing closing delimiter")
+	}
+}
+
+func TestParse_UnknownFieldsIgnored(t *testing.T) {
+	content := `---
+id: task-unk
+from: architect
+to: auth
+type: task
+timestamp: 2026-04-01T14:32:00Z
+custom_field: should-be-ignored
+another: 42
+---
+
+Body.
+`
+	msg, err := mail.Parse(content, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.ID != "task-unk" {
+		t.Errorf("ID = %q, want %q", msg.ID, "task-unk")
+	}
+}
+
+func TestParse_AllMessageTypes(t *testing.T) {
+	types := []mail.MessageType{
+		mail.TypeTask,
+		mail.TypeQuestion,
+		mail.TypeResponse,
+		mail.TypeNotify,
+		mail.TypeHandoff,
+		mail.TypeCancel,
+	}
+
+	for _, mt := range types {
+		t.Run(string(mt), func(t *testing.T) {
+			content := "---\nid: msg-001\nfrom: a\nto: b\ntype: " + string(mt) + "\ntimestamp: 2026-04-01T14:32:00Z\n---\n\nBody.\n"
+			msg, err := mail.Parse(content, "")
+			if err != nil {
+				t.Fatalf("unexpected error for type %q: %v", mt, err)
+			}
+			if msg.Type != mt {
+				t.Errorf("Type = %q, want %q", msg.Type, mt)
+			}
+		})
+	}
+}
+
+func TestParse_DelimiterTrailingText(t *testing.T) {
+	// Opening --- followed by non-newline text should fail
+	content := `--- not valid
+id: task-001
+from: a
+to: b
+type: task
+---
+
+Body.
+`
+	_, err := mail.Parse(content, "")
+	if err == nil {
+		t.Fatal("expected error for delimiter with trailing text")
+	}
+}
+
+// FUZZ CANDIDATE: mail.Parse accepts untrusted string input (message files
+// from the postoffice). Recommended: add to continuous fuzzing corpus with
+// go test -fuzz. Harness: feed arbitrary strings, assert no panics, and that
+// errors are returned (not panics) for all invalid inputs. Use race detector.

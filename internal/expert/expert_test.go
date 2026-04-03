@@ -219,3 +219,190 @@ func TestAppendIndex(t *testing.T) {
 		t.Error("missing second entry")
 	}
 }
+
+func TestExtractSummary_MultipleResults_UsesLast(t *testing.T) {
+	output := `{"type":"result","result":"first result"}
+{"type":"result","result":"second and final result"}
+`
+	summary := expert.ExtractSummary([]byte(output))
+	if summary != "second and final result" {
+		t.Errorf("summary = %q, want %q", summary, "second and final result")
+	}
+}
+
+func TestExtractSummary_MalformedMixedWithValid(t *testing.T) {
+	output := `not json at all
+{"type":"tool_use","name":"Read"}
+{broken json
+{"type":"result","result":"survived the chaos"}
+`
+	summary := expert.ExtractSummary([]byte(output))
+	if summary != "survived the chaos" {
+		t.Errorf("summary = %q, want %q", summary, "survived the chaos")
+	}
+}
+
+func TestExtractSummary_WhitespaceOnlyResult(t *testing.T) {
+	output := "{\"type\":\"result\",\"result\":\"   \\n  \\t  \"}"
+	summary := expert.ExtractSummary([]byte(output))
+	if summary != "(no summary available)" {
+		t.Errorf("summary = %q, want fallback %q", summary, "(no summary available)")
+	}
+}
+
+func TestAssemblePrompt_EmptyFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	// Write files with only whitespace — readOptionalFile trims, returns ""
+	os.WriteFile(filepath.Join(dir, "identity.md"), []byte("  \n  "), 0o644)
+	os.WriteFile(filepath.Join(dir, "state.md"), []byte("  \n  "), 0o644)
+	os.WriteFile(filepath.Join(dir, "errors.md"), []byte("  \n  "), 0o644)
+
+	cfg := &expert.SpawnConfig{
+		Name:      "empty-files",
+		ExpertDir: dir,
+		TaskMessage: &mail.Message{
+			ID:       "task-100",
+			From:     "architect",
+			Type:     mail.TypeTask,
+			Priority: mail.PriorityNormal,
+			Body:     "Do something.",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sections for empty files should be omitted
+	if strings.Contains(prompt, "## Expert Identity") {
+		t.Error("prompt should not include identity section for whitespace-only file")
+	}
+	if strings.Contains(prompt, "## Current State") {
+		t.Error("prompt should not include state section for whitespace-only file")
+	}
+	if strings.Contains(prompt, "## Known Errors") {
+		t.Error("prompt should not include errors section for whitespace-only file")
+	}
+
+	// Task section should still be present
+	if !strings.Contains(prompt, "## Task") {
+		t.Error("prompt missing task section")
+	}
+}
+
+func TestAssemblePrompt_EmptyTaskBody(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := &expert.SpawnConfig{
+		Name:      "empty-body",
+		ExpertDir: dir,
+		TaskMessage: &mail.Message{
+			ID:        "task-200",
+			From:      "concierge",
+			Type:      mail.TypeTask,
+			Priority:  mail.PriorityHigh,
+			Contracts: []string{"contract-001"},
+			Body:      "",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "## Task") {
+		t.Error("prompt missing task section")
+	}
+	if !strings.Contains(prompt, "### Task Metadata") {
+		t.Error("prompt missing task metadata")
+	}
+	if !strings.Contains(prompt, "- ID: task-200") {
+		t.Error("prompt missing task ID")
+	}
+	if !strings.Contains(prompt, "- Priority: high") {
+		t.Error("prompt missing priority")
+	}
+}
+
+func TestAppendIndex_SanitizesPipeInSummary(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := &expert.LogEntry{
+		TaskID:    "task-300",
+		Timestamp: time.Date(2026, 4, 1, 14, 32, 0, 0, time.UTC),
+		From:      "architect",
+		Summary:   "choice A | choice B | choice C",
+	}
+
+	if err := expert.AppendIndex(dir, entry); err != nil {
+		t.Fatalf("AppendIndex failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "logs", "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(data)
+	if !strings.Contains(content, `choice A \| choice B \| choice C`) {
+		t.Errorf("pipes not escaped in index.md:\n%s", content)
+	}
+}
+
+func TestAppendIndex_SanitizesNewlineInSummary(t *testing.T) {
+	dir := t.TempDir()
+
+	entry := &expert.LogEntry{
+		TaskID:    "task-301",
+		Timestamp: time.Date(2026, 4, 1, 14, 32, 0, 0, time.UTC),
+		From:      "concierge",
+		Summary:   "line one\nline two\nline three",
+	}
+
+	if err := expert.AppendIndex(dir, entry); err != nil {
+		t.Fatalf("AppendIndex failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "logs", "index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content := string(data)
+	if strings.Contains(content, "\nline two") {
+		t.Error("newlines in summary should be collapsed to spaces")
+	}
+	if !strings.Contains(content, "line one line two line three") {
+		t.Errorf("newlines not collapsed in index.md:\n%s", content)
+	}
+}
+
+// Test Plan for expert.go + log.go
+//
+// AssemblePrompt (Classification: I/O BOUNDARY + DATA TRANSFORMER)
+//   [x] Happy: all files present (TestAssemblePrompt_AllFiles)
+//   [x] Happy: missing optional files (TestAssemblePrompt_MissingOptionalFiles)
+//   [x] Unhappy: no task message (TestAssemblePrompt_NoTaskMessage)
+//   [x] Boundary: empty files (exist but whitespace-only) (TestAssemblePrompt_EmptyFiles)
+//   [x] Boundary: empty task body (TestAssemblePrompt_EmptyTaskBody)
+//
+// ExtractSummary (Classification: INPUT PARSER)
+//   [x] Happy: valid stream-json (TestExtractSummary_ValidStreamJSON)
+//   [x] Unhappy: no result message (TestExtractSummary_NoResultMessage)
+//   [x] Boundary: empty output (TestExtractSummary_EmptyOutput)
+//   [x] Boundary: truncation (TestExtractSummary_Truncation)
+//   [x] Boundary: multiple results uses last (TestExtractSummary_MultipleResults_UsesLast)
+//   [x] Boundary: malformed JSON mixed with valid (TestExtractSummary_MalformedMixedWithValid)
+//   [x] Boundary: whitespace-only result (TestExtractSummary_WhitespaceOnlyResult)
+//   [ ] Fuzz: ExtractSummary accepts arbitrary bytes — candidate for go fuzzing
+//
+// WriteLog (Classification: I/O BOUNDARY)
+//   [x] Happy: writes log file (TestWriteLog)
+//
+// AppendIndex (Classification: I/O BOUNDARY)
+//   [x] Happy: creates and appends entries (TestAppendIndex)
+//   [x] Boundary: sanitizes pipe characters (TestAppendIndex_SanitizesPipeInSummary)
+//   [x] Boundary: sanitizes newlines (TestAppendIndex_SanitizesNewlineInSummary)
