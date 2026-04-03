@@ -22,12 +22,14 @@ import (
 
 // SpawnConfig holds everything needed to spawn an expert session.
 type SpawnConfig struct {
-	Name         string
-	Model        string
-	AllowedTools []string
-	ProjectDir   string        // working directory for claude
-	ExpertDir    string        // contains identity.md, state.md, errors.md
-	TaskMessage  *mail.Message // the task to execute
+	Name          string
+	Model         string
+	AllowedTools  []string
+	ProjectDir    string        // working directory for claude
+	ExpertDir     string        // contains identity.md, state.md, errors.md
+	PoolDir       string        // pool root directory (set as AGENT_POOL_DIR env var)
+	TaskMessage   *mail.Message // the task to execute
+	MCPConfigPath string        // path to MCP config JSON; if set, --mcp-config is added
 }
 
 // Result holds the outcome of an expert session.
@@ -49,32 +51,28 @@ func AssemblePrompt(cfg *SpawnConfig) (string, error) {
 		return "", fmt.Errorf("spawn config is nil")
 	}
 
+	identity, state, errors, err := ReadState(cfg.ExpertDir)
+	if err != nil {
+		return "", err
+	}
+
 	var b strings.Builder
 
-	// Identity
-	if content, err := readOptionalFile(cfg.ExpertDir, "identity.md"); err != nil {
-		return "", fmt.Errorf("reading identity.md: %w", err)
-	} else if content != "" {
+	if identity != "" {
 		b.WriteString("## Expert Identity\n\n")
-		b.WriteString(content)
+		b.WriteString(identity)
 		b.WriteString("\n\n")
 	}
 
-	// State
-	if content, err := readOptionalFile(cfg.ExpertDir, "state.md"); err != nil {
-		return "", fmt.Errorf("reading state.md: %w", err)
-	} else if content != "" {
+	if state != "" {
 		b.WriteString("## Current State\n\n")
-		b.WriteString(content)
+		b.WriteString(state)
 		b.WriteString("\n\n")
 	}
 
-	// Errors
-	if content, err := readOptionalFile(cfg.ExpertDir, "errors.md"); err != nil {
-		return "", fmt.Errorf("reading errors.md: %w", err)
-	} else if content != "" {
+	if errors != "" {
 		b.WriteString("## Known Errors & Pitfalls\n\n")
-		b.WriteString(content)
+		b.WriteString(errors)
 		b.WriteString("\n\n")
 	}
 
@@ -112,6 +110,9 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	if cfg == nil {
 		return nil, fmt.Errorf("spawn config is nil")
 	}
+	if cfg.PoolDir == "" {
+		return nil, fmt.Errorf("pool directory is required")
+	}
 
 	claudePath, err := exec.LookPath("claude")
 	if err != nil {
@@ -133,6 +134,10 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
 	}
 
+	if cfg.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", cfg.MCPConfigPath)
+	}
+
 	cmd := exec.CommandContext(ctx, claudePath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Dir = cfg.ProjectDir
@@ -141,6 +146,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	cmd.Env = append(os.Environ(),
 		"AGENT_POOL_EXPERT="+cfg.Name,
 		"AGENT_POOL_TASK_ID="+cfg.TaskMessage.ID,
+		"AGENT_POOL_DIR="+cfg.PoolDir,
 	)
 
 	var stdout, stderr bytes.Buffer

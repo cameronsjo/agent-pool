@@ -18,6 +18,7 @@ import (
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 	"git.sjo.lol/cameron/agent-pool/internal/expert"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
 )
 
 // Spawner abstracts expert session spawning for testability.
@@ -198,13 +199,33 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	projectDir := d.resolveProjectDir()
 	expertDir := filepath.Join(d.poolDir, "experts", expertName)
 
+	mcpConfigPath, mcpErr := agentmcp.WriteTempConfig(d.poolDir, expertName)
+	if mcpErr != nil {
+		d.logger.Error("Failed to write MCP config",
+			"expert", expertName,
+			"task_id", msg.ID,
+			"error", mcpErr,
+		)
+		return false
+	}
+	defer func() {
+		if err := os.Remove(mcpConfigPath); err != nil && !os.IsNotExist(err) {
+			d.logger.Warn("Failed to remove MCP config temp file",
+				"path", mcpConfigPath,
+				"error", err,
+			)
+		}
+	}()
+
 	cfg := &expert.SpawnConfig{
-		Name:         expertName,
-		Model:        model,
-		AllowedTools: tools,
-		ProjectDir:   projectDir,
-		ExpertDir:    expertDir,
-		TaskMessage:  msg,
+		Name:          expertName,
+		Model:         model,
+		AllowedTools:  tools,
+		ProjectDir:    projectDir,
+		ExpertDir:     expertDir,
+		PoolDir:       d.poolDir,
+		TaskMessage:   msg,
+		MCPConfigPath: mcpConfigPath,
 	}
 
 	result, err := d.spawner.Spawn(ctx, d.logger, cfg)

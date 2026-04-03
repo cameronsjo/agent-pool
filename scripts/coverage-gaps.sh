@@ -18,7 +18,7 @@ COVER_PROFILE="${COVER_PROFILE:-coverage.out}"
 
 # Run tests with coverage if profile doesn't exist or is stale
 if [[ ! -f "$COVER_PROFILE" ]] || [[ -n "$(find . -name '*.go' -newer "$COVER_PROFILE" 2>/dev/null | head -1)" ]]; then
-    if ! go test ./... -coverprofile="$COVER_PROFILE" -covermode=atomic 2>&1; then
+    if ! go test -coverprofile="$COVER_PROFILE" -covermode=atomic -coverpkg=./... ./... 2>&1; then
         echo "ERROR: go test failed. Fix test failures before checking coverage." >&2
         exit 1
     fi
@@ -34,7 +34,7 @@ echo "$FUNC_OUTPUT" | grep "^total:" | awk '{printf "  Total: %s\n", $NF}'
 echo ""
 
 # Show per-package totals from test output
-go test ./... -cover 2>/dev/null | while IFS= read -r line; do
+go test -coverpkg=./... ./... -cover 2>/dev/null | while IFS= read -r line; do
     if [[ "$line" == ok* ]] && [[ "$line" == *"coverage:"* ]]; then
         pkg=$(echo "$line" | awk '{print $2}')
         cov=$(echo "$line" | grep -oE '[0-9]+\.[0-9]+%')

@@ -7,6 +7,7 @@ CMD_DIR    := cmd/agent-pool
 GO         := go
 GOFLAGS    :=
 LDFLAGS    := -s -w
+COVERAGE_THRESHOLD ?= 65
 
 ## ─── Default ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ test:
 .PHONY: test-cover
 ## Run tests with coverage report (HTML)
 test-cover:
-	$(GO) test ./... -coverprofile=coverage.out -covermode=atomic
+	$(GO) test -coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
 
@@ -53,6 +54,14 @@ test-cover:
 ## Show functions below coverage threshold (default 70%, override with THRESHOLD=N)
 test-gaps:
 	@scripts/coverage-gaps.sh $(THRESHOLD)
+
+.PHONY: test-gates
+## Fail if total coverage drops below threshold (CI gate)
+test-gates:
+	$(GO) test -coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
+	@COVERAGE=$$($(GO) tool cover -func=coverage.out | grep ^total: | awk '{print $$NF}' | tr -d '%'); \
+	echo "Total coverage: $${COVERAGE}%  (threshold: $(COVERAGE_THRESHOLD)%)"; \
+	awk "BEGIN {exit ($${COVERAGE} < $(COVERAGE_THRESHOLD))}"
 
 ## ─── Quality ─────────────────────────────────────────────────────────────────
 
