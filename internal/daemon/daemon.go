@@ -413,6 +413,10 @@ func (d *Daemon) resolveExpertName(inboxDir string) string {
 func (d *Daemon) ensureDirs() error {
 	dirs := []string{
 		filepath.Join(d.poolDir, "postoffice"),
+		// Built-in roles get top-level inbox directories
+		filepath.Join(d.poolDir, "architect", "inbox"),
+		filepath.Join(d.poolDir, "researcher", "inbox"),
+		filepath.Join(d.poolDir, "concierge", "inbox"),
 	}
 
 	for name := range d.cfg.Experts {

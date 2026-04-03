@@ -177,13 +177,22 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 
 	result.Summary = ExtractSummary(result.Output)
 
-	logger.Info("Successfully completed expert session",
-		"expert", cfg.Name,
-		"task_id", cfg.TaskMessage.ID,
-		"exit_code", exitCode,
-		"duration", duration,
-		"output_bytes", len(result.Output),
-	)
+	if exitCode == 0 {
+		logger.Info("Successfully completed expert session",
+			"expert", cfg.Name,
+			"task_id", cfg.TaskMessage.ID,
+			"duration", duration,
+			"output_bytes", len(result.Output),
+		)
+	} else {
+		logger.Warn("Expert session exited with non-zero code",
+			"expert", cfg.Name,
+			"task_id", cfg.TaskMessage.ID,
+			"exit_code", exitCode,
+			"duration", duration,
+			"output_bytes", len(result.Output),
+		)
+	}
 
 	if len(stderr.Bytes()) > 0 {
 		logger.Warn("Expert session produced stderr output",
