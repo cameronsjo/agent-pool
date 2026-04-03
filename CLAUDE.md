@@ -72,15 +72,21 @@ make check            # vet + lint + test
 
 ## Implementation Status
 
-**v0.1 complete** — basic expert lifecycle loop:
+**v0.2 complete** — MCP + State Management:
 
 - [x] fsnotify watching postoffice
 - [x] Mail routing (parse YAML header, copy to inbox)
 - [x] Expert spawning via `claude -p`
 - [x] Log capture to `logs/{task-id}.json`
 - [x] Manual task submission (write .md to postoffice/)
+- [x] MCP server (stdio, per-expert) with expert tool set
+- [x] `pool_update_state`, `pool_append_error`, `pool_read_state`
+- [x] `pool_send_response`, `pool_recall`, `pool_search_index`
+- [x] Stop hook for flush guarantee (`agent-pool flush`)
+- [x] PreToolUse hook for code ownership guard (`agent-pool guard`)
+- [x] MCP config generation + spawn integration (`--mcp-config`)
 
-Next: **v0.2** — MCP + State Management
+Next: **v0.3** — Task Board + Dependencies
 
 See `docs/plans/architecture.md` § Implementation Phasing for v0.1–v0.8 roadmap.
 
