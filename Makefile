@@ -43,11 +43,16 @@ test:
 	$(GO) test ./... -v
 
 .PHONY: test-cover
-## Run tests with coverage report
+## Run tests with coverage report (HTML)
 test-cover:
-	$(GO) test ./... -coverprofile=coverage.out
+	$(GO) test ./... -coverprofile=coverage.out -covermode=atomic
 	$(GO) tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report: coverage.html"
+
+.PHONY: test-gaps
+## Show functions below coverage threshold (default 70%, override with THRESHOLD=N)
+test-gaps:
+	@scripts/coverage-gaps.sh $(THRESHOLD)
 
 ## ─── Quality ─────────────────────────────────────────────────────────────────
 

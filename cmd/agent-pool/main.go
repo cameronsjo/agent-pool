@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
 
 	"git.sjo.lol/cameron/agent-pool/internal/config"
+	"git.sjo.lol/cameron/agent-pool/internal/daemon"
 )
 
 func main() {
@@ -39,11 +45,33 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("agent-pool starting for pool: %s\n", cfg.Pool.Name)
-	fmt.Printf("  project dir: %s\n", cfg.Pool.ProjectDir)
-	fmt.Printf("  experts: %d\n", len(cfg.Experts))
+	// Resolve poolDir to absolute path for consistent path handling
+	if poolDir == "" {
+		poolDir, err = os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error getting current directory: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	poolDir, err = filepath.Abs(poolDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving pool directory: %v\n", err)
+		os.Exit(1)
+	}
 
-	// TODO(#1): implement daemon.Run(cfg)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+
+	ctx, stop := signal.NotifyContext(context.Background(),
+		syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+
+	d := daemon.New(cfg, poolDir, logger)
+	if err := d.Run(ctx); err != nil {
+		logger.Error("Daemon failed", "error", err)
+		os.Exit(1)
+	}
 }
 
 func printUsage() {
