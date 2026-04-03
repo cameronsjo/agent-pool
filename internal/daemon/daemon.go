@@ -127,7 +127,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			d.logger.Info("Preparing to shut down daemon")
+			d.logger.Info("Shutting down daemon",
+				"pool", d.cfg.Pool.Name,
+			)
 			return nil
 
 		case event, ok := <-watcher.Events():
@@ -412,14 +414,14 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		switch task.Status {
 		case taskboard.StatusBlocked:
 			d.mu.Unlock()
-			d.logger.Debug("Skipping blocked task",
+			d.logger.Debug("Skipping task. Reason: blocked on dependencies",
 				"expert", expertName,
 				"task_id", msg.ID,
 			)
 			return false
 		case taskboard.StatusCancelled:
 			d.mu.Unlock()
-			d.logger.Info("Skipping cancelled task, removing inbox file",
+			d.logger.Debug("Skipping task. Reason: task was cancelled",
 				"expert", expertName,
 				"task_id", msg.ID,
 			)
@@ -427,9 +429,10 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			return true
 		case taskboard.StatusCompleted, taskboard.StatusFailed:
 			d.mu.Unlock()
-			d.logger.Debug("Skipping already-terminal task",
+			d.logger.Debug("Skipping task. Reason: task already reached terminal status",
 				"expert", expertName,
 				"task_id", msg.ID,
+				"status", task.Status,
 			)
 			os.Remove(path)
 			return true
@@ -440,6 +443,11 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		task.Status = taskboard.StatusActive
 		task.StartedAt = &now
 		d.board.Save(d.boardPath)
+
+		d.logger.Debug("Preparing to run task",
+			"expert", expertName,
+			"task_id", msg.ID,
+		)
 	}
 	d.mu.Unlock()
 

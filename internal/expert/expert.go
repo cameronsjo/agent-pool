@@ -181,6 +181,12 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		// Normal exit
 	case <-ctx.Done():
 		// Timeout or parent cancel — send SIGTERM for graceful shutdown
+		logger.Warn("Session context cancelled, sending SIGTERM",
+			"expert", cfg.Name,
+			"task_id", cfg.TaskMessage.ID,
+			"pid", pid,
+			"reason", ctx.Err(),
+		)
 		if cmd.Process != nil {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -188,7 +194,17 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		select {
 		case runErr = <-done:
 			// Process exited after SIGTERM
+			logger.Debug("Expert process exited after SIGTERM",
+				"expert", cfg.Name,
+				"task_id", cfg.TaskMessage.ID,
+				"pid", pid,
+			)
 		case <-time.After(10 * time.Second):
+			logger.Warn("Expert process did not exit after SIGTERM, sending SIGKILL",
+				"expert", cfg.Name,
+				"task_id", cfg.TaskMessage.ID,
+				"pid", pid,
+			)
 			if cmd.Process != nil {
 				_ = cmd.Process.Kill()
 			}
