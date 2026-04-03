@@ -1,7 +1,7 @@
 # Binaries
 /bin/
 /dist/
-agent-pool
+/agent-pool
 
 # Go
 *.exe
