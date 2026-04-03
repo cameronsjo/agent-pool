@@ -82,9 +82,7 @@ func cmdStart() {
 	}
 }
 
-// cmdMCP starts the stdio MCP server for an expert session.
-// Claude Code spawns this as a child process via --mcp-config.
-// Stdout is the MCP transport; logs go to stderr.
+// cmdMCP starts the stdio MCP server. Stdout is the MCP transport; logs go to stderr.
 func cmdMCP() {
 	flags := parseFlags(2, "pool", "expert")
 
@@ -108,7 +106,6 @@ func cmdMCP() {
 	}
 }
 
-// cmdFlush runs the Stop hook — verifies expert state after session end.
 func cmdFlush() {
 	flags := parseFlags(2, "pool", "expert", "task")
 
@@ -133,7 +130,6 @@ func cmdFlush() {
 	}
 }
 
-// cmdGuard runs the PreToolUse hook — code ownership guard for Write/Edit.
 func cmdGuard() {
 	flags := parseFlags(2, "pool", "expert", "path")
 
