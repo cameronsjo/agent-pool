@@ -1128,3 +1128,138 @@ session_timeout = "1s"
 
 	shutdownDaemon(t, cancel, errCh)
 }
+
+// writeHandoff writes a handoff mail file to the given directory.
+func writeHandoff(t *testing.T, dir, id, from, to string) string {
+	t.Helper()
+	content := fmt.Sprintf(`---
+id: %s
+from: %s
+to: %s
+type: handoff
+timestamp: 2026-04-01T15:00:00Z
+---
+
+Context exhaustion, need fresh session.
+`, id, from, to)
+	path := filepath.Join(dir, id+".md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing handoff %s: %v", id, err)
+	}
+	return path
+}
+
+func TestDaemon_HandoffIncrementsCount(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	gate := make(chan struct{})
+	fake := &fakeSpawner{gate: gate}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-handoff-001", "architect", "auth")
+
+	// Wait for the task to become active (blocked on gate)
+	time.Sleep(1 * time.Second)
+
+	writeHandoff(t, filepath.Join(poolDir, "postoffice"), "handoff-001", "auth", "architect")
+
+	time.Sleep(1 * time.Second)
+
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-handoff-001"]
+	if !ok {
+		t.Fatal("task-handoff-001 not found in taskboard")
+	}
+	if task.HandoffCount != 1 {
+		t.Errorf("HandoffCount = %d, want 1", task.HandoffCount)
+	}
+	if task.NeedsAttention {
+		t.Error("NeedsAttention should be false after 1 handoff")
+	}
+
+	close(gate)
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_HandoffEscalation(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	gate := make(chan struct{})
+	fake := &fakeSpawner{gate: gate}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-escalate-001", "architect", "auth")
+
+	time.Sleep(1 * time.Second)
+
+	writeHandoff(t, filepath.Join(poolDir, "postoffice"), "handoff-esc-001", "auth", "architect")
+	time.Sleep(500 * time.Millisecond)
+	writeHandoff(t, filepath.Join(poolDir, "postoffice"), "handoff-esc-002", "auth", "architect")
+
+	time.Sleep(1 * time.Second)
+
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-escalate-001"]
+	if !ok {
+		t.Fatal("task-escalate-001 not found in taskboard")
+	}
+	if task.HandoffCount != 2 {
+		t.Errorf("HandoffCount = %d, want 2", task.HandoffCount)
+	}
+	if !task.NeedsAttention {
+		t.Error("NeedsAttention should be true after 2 handoffs")
+	}
+
+	close(gate)
+	shutdownDaemon(t, cancel, errCh)
+}

@@ -194,6 +194,57 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 	if routed.Type == mail.TypeTask || routed.Type == mail.TypeQuestion {
 		d.registerTask(routed)
 	}
+
+	if routed.Type == mail.TypeHandoff {
+		d.handleHandoff(routed)
+	}
+}
+
+// handleHandoff records a handoff event against the active task for the expert
+// that sent the message. Escalates to needs_attention after repeated handoffs.
+func (d *Daemon) handleHandoff(msg *mail.Message) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	var activeTaskID string
+	for _, t := range d.board.Tasks {
+		if t.Expert == msg.From && t.Status == taskboard.StatusActive {
+			activeTaskID = t.ID
+			break
+		}
+	}
+
+	if activeTaskID == "" {
+		d.logger.Warn("Received handoff without active task",
+			"from", msg.From,
+		)
+		return
+	}
+
+	if err := d.board.RecordHandoff(activeTaskID); err != nil {
+		d.logger.Error("Failed to record handoff",
+			"task_id", activeTaskID,
+			"error", err,
+		)
+		return
+	}
+
+	task, _ := d.board.Get(activeTaskID)
+	if task.NeedsAttention {
+		d.logger.Warn("Task escalated after multiple handoffs",
+			"task_id", activeTaskID,
+			"expert", msg.From,
+			"handoff_count", task.HandoffCount,
+		)
+	} else {
+		d.logger.Info("Successfully recorded handoff",
+			"task_id", activeTaskID,
+			"expert", msg.From,
+			"handoff_count", task.HandoffCount,
+		)
+	}
+
+	d.board.Save(d.boardPath)
 }
 
 // handleCancel processes a cancel message: updates the taskboard, removes any
