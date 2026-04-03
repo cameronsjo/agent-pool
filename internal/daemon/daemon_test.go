@@ -20,8 +20,9 @@ import (
 
 // fakeSpawner records calls and returns canned results.
 type fakeSpawner struct {
-	mu    sync.Mutex
-	calls []*expert.SpawnConfig
+	mu       sync.Mutex
+	calls    []*expert.SpawnConfig
+	attempts int // incremented on every Spawn call, including cancelled ones
 
 	// result and err are returned from Spawn. Defaults to a zero-value Result if nil.
 	result *expert.Result
@@ -31,9 +32,21 @@ type fakeSpawner struct {
 	gate chan struct{}
 }
 
-func (f *fakeSpawner) Spawn(_ context.Context, _ *slog.Logger, cfg *expert.SpawnConfig) (*expert.Result, error) {
+func (f *fakeSpawner) Spawn(ctx context.Context, _ *slog.Logger, cfg *expert.SpawnConfig) (*expert.Result, error) {
+	f.mu.Lock()
+	f.attempts++
+	f.mu.Unlock()
+
 	if f.gate != nil {
-		<-f.gate
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return &expert.Result{
+				TaskID:   cfg.TaskMessage.ID,
+				ExitCode: -1,
+				Duration: 0,
+			}, ctx.Err()
+		}
 	}
 
 	f.mu.Lock()
@@ -63,6 +76,12 @@ func (f *fakeSpawner) getCalls() []*expert.SpawnConfig {
 	out := make([]*expert.SpawnConfig, len(f.calls))
 	copy(out, f.calls)
 	return out
+}
+
+func (f *fakeSpawner) getAttempts() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.attempts
 }
 
 func TestDaemon_EnsureDirsAndRouting(t *testing.T) {
@@ -1028,6 +1047,83 @@ This depends on task-prereq.
 	}
 	if task.Status != "blocked" {
 		t.Errorf("Status = %q, want %q", task.Status, "blocked")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_SessionTimeoutCancelsSpawn(t *testing.T) {
+	poolDir := t.TempDir()
+
+	// Configure pool with 1s session timeout
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+session_timeout = "1s"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	// Gate that never closes — spawn blocks until context cancels
+	gate := make(chan struct{})
+	defer close(gate)
+	fake := &fakeSpawner{gate: gate}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Write task to auth's inbox
+	inboxDir := filepath.Join(poolDir, "experts", "auth", "inbox")
+	writeMessage(t, inboxDir, "task-timeout-001", "architect", "auth")
+
+	// Poll until the spawn was attempted and the 1s timeout fires
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if fake.getAttempts() > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if fake.getAttempts() == 0 {
+		t.Fatal("expected spawn to be attempted")
+	}
+
+	// Wait for the 1s timeout to expire and the daemon to process the failure
+	time.Sleep(2 * time.Second)
+
+	// Spawn should have been cancelled by timeout — no successful calls recorded
+	calls := fake.getCalls()
+	if len(calls) != 0 {
+		t.Errorf("expected 0 successful spawn calls (timeout should cancel), got %d", len(calls))
+	}
+
+	// Inbox file should be preserved (spawn failed)
+	inboxFile := filepath.Join(inboxDir, "task-timeout-001.md")
+	if _, err := os.Stat(inboxFile); os.IsNotExist(err) {
+		t.Error("inbox file should be preserved when spawn is cancelled by timeout")
+	}
+
+	// No log file should be written (spawn failed before logging)
+	logPath := filepath.Join(poolDir, "experts", "auth", "logs", "task-timeout-001.json")
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Error("log file should not be written when spawn fails due to timeout")
 	}
 
 	shutdownDaemon(t, cancel, errCh)

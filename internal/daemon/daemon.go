@@ -426,7 +426,17 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		MCPConfigPath: mcpConfigPath,
 	}
 
-	result, err := d.spawner.Spawn(ctx, d.logger, cfg)
+	timeout, parseErr := d.cfg.Defaults.ParseSessionTimeout()
+	if parseErr != nil {
+		d.logger.Warn("Failed to parse session timeout, using default 10m",
+			"error", parseErr,
+		)
+		timeout = 10 * time.Minute
+	}
+	spawnCtx, spawnCancel := context.WithTimeout(ctx, timeout)
+	defer spawnCancel()
+
+	result, err := d.spawner.Spawn(spawnCtx, d.logger, cfg)
 	if err != nil {
 		d.logger.Error("Failed to spawn expert",
 			"expert", expertName,

@@ -9,6 +9,11 @@
 //   [x] Boundary: poolDir with tilde expansion
 //   [x] Happy: multiple experts configured
 //   [x] Happy: expert with custom allowed_tools
+//
+// DefaultsSection.ParseSessionTimeout (Classification: DATA TRANSFORMER)
+//   [x] Happy: valid duration "10m" (TestDefaultsSection_ParseSessionTimeout)
+//   [x] Happy: valid duration "30s" (TestDefaultsSection_ParseSessionTimeout)
+//   [x] Unhappy: invalid duration string (TestDefaultsSection_ParseSessionTimeout)
 
 package config_test
 
@@ -17,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 )
@@ -332,5 +338,31 @@ func assertSliceEqual(t *testing.T, field string, expected []string, actual []st
 		if expected[i] != actual[i] {
 			t.Errorf("%s[%d]: expected %q, got %q", field, i, expected[i], actual[i])
 		}
+	}
+}
+
+func TestDefaultsSection_ParseSessionTimeout(t *testing.T) {
+	d := config.DefaultsSection{SessionTimeout: "10m"}
+	dur, err := d.ParseSessionTimeout()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dur != 10*time.Minute {
+		t.Errorf("expected 10m, got %v", dur)
+	}
+
+	d2 := config.DefaultsSection{SessionTimeout: "30s"}
+	dur2, err := d2.ParseSessionTimeout()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dur2 != 30*time.Second {
+		t.Errorf("expected 30s, got %v", dur2)
+	}
+
+	d3 := config.DefaultsSection{SessionTimeout: "invalid"}
+	_, err = d3.ParseSessionTimeout()
+	if err == nil {
+		t.Fatal("expected error for invalid duration")
 	}
 }

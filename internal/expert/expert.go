@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
@@ -36,6 +37,7 @@ type SpawnConfig struct {
 type Result struct {
 	TaskID   string
 	ExitCode int
+	PID      int
 	Output   []byte // raw stream-json output from stdout
 	Stderr   []byte
 	Summary  string
@@ -161,13 +163,47 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	)
 
 	start := time.Now()
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting claude: %w", err)
+	}
+
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	var runErr error
+	select {
+	case runErr = <-done:
+		// Normal exit
+	case <-ctx.Done():
+		// Timeout or parent cancel — send SIGTERM for graceful shutdown
+		if cmd.Process != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+		// Grace period for Stop hook to flush state
+		select {
+		case runErr = <-done:
+			// Process exited after SIGTERM
+		case <-time.After(10 * time.Second):
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			runErr = <-done
+		}
+	}
+
 	duration := time.Since(start)
 
 	exitCode := 0
 	if runErr != nil {
 		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
+		} else if ctx.Err() != nil {
+			exitCode = -1 // Killed by timeout
 		} else {
 			return nil, fmt.Errorf("running claude: %w", runErr)
 		}
@@ -176,6 +212,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	result := &Result{
 		TaskID:   cfg.TaskMessage.ID,
 		ExitCode: exitCode,
+		PID:      pid,
 		Output:   stdout.Bytes(),
 		Stderr:   stderr.Bytes(),
 		Duration: duration,
