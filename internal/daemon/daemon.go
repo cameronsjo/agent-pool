@@ -14,11 +14,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 	"git.sjo.lol/cameron/agent-pool/internal/expert"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
 	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+	"git.sjo.lol/cameron/agent-pool/internal/taskboard"
 )
 
 // Spawner abstracts expert session spawning for testability.
@@ -40,8 +42,10 @@ type Daemon struct {
 	logger  *slog.Logger
 	spawner Spawner
 
-	mu   sync.Mutex
-	busy map[string]bool // tracks which experts are currently spawned
+	mu        sync.Mutex
+	board     *taskboard.Board
+	boardPath string
+	draining  map[string]bool // re-entrancy guard for expert inbox drains
 }
 
 // Option configures a Daemon.
@@ -54,12 +58,25 @@ func WithSpawner(s Spawner) Option {
 
 // New creates a Daemon for the given pool.
 func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Option) *Daemon {
+	boardPath := filepath.Join(poolDir, "taskboard.json")
+	board, err := taskboard.Load(boardPath)
+	if err != nil {
+		// Non-fatal: start with empty board. Log the error for diagnosis.
+		logger.Warn("Failed to load taskboard, starting with empty board",
+			"path", boardPath,
+			"error", err,
+		)
+		board = taskboard.New()
+	}
+
 	d := &Daemon{
-		cfg:     cfg,
-		poolDir: poolDir,
-		logger:  logger,
-		busy:    make(map[string]bool),
-		spawner: defaultSpawner{},
+		cfg:       cfg,
+		poolDir:   poolDir,
+		logger:    logger,
+		board:     board,
+		boardPath: boardPath,
+		draining:  make(map[string]bool),
+		spawner:   defaultSpawner{},
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -140,7 +157,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 }
 
-// handlePostoffice routes a message from the postoffice to the recipient's inbox.
+// handlePostoffice routes a message from the postoffice to the recipient's inbox
+// and registers task-type messages in the taskboard.
 func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 	msg, err := mail.Route(d.logger, d.poolDir, path)
 	if err != nil {
@@ -155,35 +173,83 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 		"id", msg.ID,
 		"to", msg.To,
 	)
+
+	if msg.Type == mail.TypeTask || msg.Type == mail.TypeQuestion {
+		d.registerTask(msg)
+	}
+}
+
+// registerTask adds a task-type message to the taskboard.
+func (d *Daemon) registerTask(msg *mail.Message) {
+	status := taskboard.StatusPending
+	if len(msg.DependsOn) > 0 {
+		status = taskboard.StatusBlocked
+	}
+
+	task := &taskboard.Task{
+		ID:        msg.ID,
+		Status:    status,
+		Expert:    msg.To,
+		DependsOn: msg.DependsOn,
+		From:      msg.From,
+		Type:      string(msg.Type),
+		Priority:  string(msg.Priority),
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if err := d.board.ValidateAdd(task); err != nil {
+		d.logger.Error("Failed to register task in taskboard",
+			"task_id", msg.ID,
+			"error", err,
+		)
+		return
+	}
+
+	if err := d.board.Add(task); err != nil {
+		d.logger.Error("Failed to add task to taskboard",
+			"task_id", msg.ID,
+			"error", err,
+		)
+		return
+	}
+
+	if err := d.board.Save(d.boardPath); err != nil {
+		d.logger.Error("Failed to save taskboard",
+			"error", err,
+		)
+	}
 }
 
 // handleInbox is the entry point from the watcher event loop. It acquires the
-// busy flag for the expert, drains all queued inbox messages iteratively, then
-// releases the flag.
+// draining flag for the expert (re-entrancy guard), drains all queued inbox
+// messages iteratively, then releases the flag.
 func (d *Daemon) handleInbox(ctx context.Context, expertName string, _ string) {
 	d.mu.Lock()
-	if d.busy[expertName] {
+	if d.draining[expertName] {
 		d.mu.Unlock()
 		d.logger.Debug("Skipping expert dispatch. Reason: expert busy",
 			"expert", expertName,
 		)
 		return
 	}
-	d.busy[expertName] = true
+	d.draining[expertName] = true
 	d.mu.Unlock()
 
 	defer func() {
 		d.mu.Lock()
-		d.busy[expertName] = false
+		d.draining[expertName] = false
 		d.mu.Unlock()
 	}()
 
 	d.drainInbox(ctx, expertName)
 }
 
-// processInboxMessage handles a single inbox file: parse, spawn, log, and
-// conditionally remove. Returns true if the file was successfully processed
-// (regardless of exit code), false if parsing or spawning failed.
+// processInboxMessage handles a single inbox file: parse, check taskboard,
+// spawn, log, update taskboard, and conditionally remove. Returns true if the
+// file was successfully processed (regardless of exit code), false if parsing
+// or spawning failed.
 func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, path string) bool {
 	msg, err := mail.ParseFile(path)
 	if err != nil {
@@ -194,6 +260,48 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		)
 		return false
 	}
+
+	// Ensure task is registered in the taskboard. Pre-existing inbox files
+	// (from before the daemon started) may not be tracked yet.
+	d.ensureTaskRegistered(msg)
+
+	// Check taskboard status under lock — skip blocked or cancelled tasks.
+	d.mu.Lock()
+	task, tracked := d.board.Get(msg.ID)
+	if tracked {
+		switch task.Status {
+		case taskboard.StatusBlocked:
+			d.mu.Unlock()
+			d.logger.Debug("Skipping blocked task",
+				"expert", expertName,
+				"task_id", msg.ID,
+			)
+			return false
+		case taskboard.StatusCancelled:
+			d.mu.Unlock()
+			d.logger.Info("Skipping cancelled task, removing inbox file",
+				"expert", expertName,
+				"task_id", msg.ID,
+			)
+			os.Remove(path)
+			return true
+		case taskboard.StatusCompleted, taskboard.StatusFailed:
+			d.mu.Unlock()
+			d.logger.Debug("Skipping already-terminal task",
+				"expert", expertName,
+				"task_id", msg.ID,
+			)
+			os.Remove(path)
+			return true
+		}
+
+		// Mark active
+		now := time.Now().UTC()
+		task.Status = taskboard.StatusActive
+		task.StartedAt = &now
+		d.board.Save(d.boardPath)
+	}
+	d.mu.Unlock()
 
 	model, tools := d.resolveExpertConfig(expertName)
 	projectDir := d.resolveProjectDir()
@@ -206,6 +314,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			"task_id", msg.ID,
 			"error", mcpErr,
 		)
+		d.markTaskFailed(msg.ID, -1)
 		return false
 	}
 	defer func() {
@@ -235,6 +344,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			"task_id", msg.ID,
 			"error", err,
 		)
+		d.markTaskFailed(msg.ID, -1)
 		return false
 	}
 
@@ -279,6 +389,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			"duration", result.Duration,
 			"summary", result.Summary,
 		)
+		d.markTaskFailed(msg.ID, result.ExitCode)
 		return true
 	}
 
@@ -290,6 +401,8 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		)
 	}
 
+	d.markTaskCompleted(msg.ID, result.ExitCode)
+
 	d.logger.Info("Successfully completed task",
 		"expert", expertName,
 		"task_id", result.TaskID,
@@ -299,6 +412,74 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	)
 
 	return true
+}
+
+// ensureTaskRegistered adds a task to the taskboard if it isn't already tracked.
+// This handles pre-existing inbox files from before the daemon started.
+func (d *Daemon) ensureTaskRegistered(msg *mail.Message) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if _, ok := d.board.Get(msg.ID); ok {
+		return
+	}
+
+	status := taskboard.StatusPending
+	if len(msg.DependsOn) > 0 {
+		status = taskboard.StatusBlocked
+	}
+
+	d.board.Add(&taskboard.Task{
+		ID:        msg.ID,
+		Status:    status,
+		Expert:    msg.To,
+		DependsOn: msg.DependsOn,
+		From:      msg.From,
+		Type:      string(msg.Type),
+		Priority:  string(msg.Priority),
+	})
+	d.board.Save(d.boardPath)
+}
+
+// markTaskCompleted updates a task's status to completed, evaluates dependencies,
+// and saves the taskboard.
+func (d *Daemon) markTaskCompleted(taskID string, exitCode int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.board.Update(taskID, func(t *taskboard.Task) {
+		now := time.Now().UTC()
+		t.Status = taskboard.StatusCompleted
+		t.CompletedAt = &now
+		t.ExitCode = &exitCode
+	})
+
+	ready := d.board.EvaluateDeps()
+	if len(ready) > 0 {
+		d.logger.Info("Dependencies resolved, tasks now ready",
+			"completed_task", taskID,
+			"newly_ready", ready,
+		)
+	}
+
+	d.board.Save(d.boardPath)
+}
+
+// markTaskFailed updates a task's status to failed, propagates failure to
+// dependents, and saves the taskboard.
+func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.board.Update(taskID, func(t *taskboard.Task) {
+		now := time.Now().UTC()
+		t.Status = taskboard.StatusFailed
+		t.CompletedAt = &now
+		t.ExitCode = &exitCode
+	})
+
+	d.board.EvaluateDeps()
+	d.board.Save(d.boardPath)
 }
 
 // drainAllInboxes processes any files sitting in expert inboxes when the daemon starts.
