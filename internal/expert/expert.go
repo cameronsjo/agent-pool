@@ -51,32 +51,28 @@ func AssemblePrompt(cfg *SpawnConfig) (string, error) {
 		return "", fmt.Errorf("spawn config is nil")
 	}
 
+	identity, state, errors, err := ReadState(cfg.ExpertDir)
+	if err != nil {
+		return "", err
+	}
+
 	var b strings.Builder
 
-	// Identity
-	if content, err := readOptionalFile(cfg.ExpertDir, "identity.md"); err != nil {
-		return "", fmt.Errorf("reading identity.md: %w", err)
-	} else if content != "" {
+	if identity != "" {
 		b.WriteString("## Expert Identity\n\n")
-		b.WriteString(content)
+		b.WriteString(identity)
 		b.WriteString("\n\n")
 	}
 
-	// State
-	if content, err := readOptionalFile(cfg.ExpertDir, "state.md"); err != nil {
-		return "", fmt.Errorf("reading state.md: %w", err)
-	} else if content != "" {
+	if state != "" {
 		b.WriteString("## Current State\n\n")
-		b.WriteString(content)
+		b.WriteString(state)
 		b.WriteString("\n\n")
 	}
 
-	// Errors
-	if content, err := readOptionalFile(cfg.ExpertDir, "errors.md"); err != nil {
-		return "", fmt.Errorf("reading errors.md: %w", err)
-	} else if content != "" {
+	if errors != "" {
 		b.WriteString("## Known Errors & Pitfalls\n\n")
-		b.WriteString(content)
+		b.WriteString(errors)
 		b.WriteString("\n\n")
 	}
 

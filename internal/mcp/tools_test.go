@@ -32,7 +32,6 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -270,7 +269,6 @@ func TestAppendError_EmptyEntry(t *testing.T) {
 	})
 
 	if !result.IsError {
-		fmt.Printf("DEBUG: result = %+v\n", result)
 		t.Error("expected error result for empty entry")
 	}
 }
@@ -323,6 +321,21 @@ func TestSendResponse_MissingTo(t *testing.T) {
 
 	if !result.IsError {
 		t.Error("expected error result for missing 'to'")
+	}
+}
+
+func TestSendResponse_PathTraversalID(t *testing.T) {
+	poolDir, _ := setupTestPool(t, "auth")
+	srv := buildTestServer(t, poolDir, "auth")
+
+	result := callTool(t, srv, "pool_send_response", map[string]any{
+		"to":   "architect",
+		"body": "response body",
+		"id":   "../../etc/evil",
+	})
+
+	if !result.IsError {
+		t.Error("expected error result for path traversal in id")
 	}
 }
 

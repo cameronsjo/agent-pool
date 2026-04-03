@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -139,6 +140,9 @@ func handleSendResponse(cfg *ServerConfig) server.ToolHandlerFunc {
 		if id == "" {
 			return mcp.NewToolResultError("id parameter is required"), nil
 		}
+		if id != filepath.Base(id) || id == "." || id == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid message ID %q: must be a simple filename", id)), nil
+		}
 
 		msg := &mail.Message{
 			ID:        id,
@@ -198,12 +202,7 @@ func handleSearchIndex(expertDir string) server.ToolHandlerFunc {
 			return mcp.NewToolResultText("no matching tasks found"), nil
 		}
 
-		result := ""
-		for _, m := range matches {
-			result += m + "\n"
-		}
-
-		return mcp.NewToolResultText(result), nil
+		return mcp.NewToolResultText(strings.Join(matches, "\n")), nil
 	}
 }
 

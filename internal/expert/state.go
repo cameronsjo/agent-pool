@@ -46,7 +46,6 @@ func WriteState(expertDir, content string) error {
 
 	path := filepath.Join(expertDir, "state.md")
 
-	// Atomic write: temp file in same directory, then rename
 	tmp, err := os.CreateTemp(expertDir, ".state-*.md")
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)

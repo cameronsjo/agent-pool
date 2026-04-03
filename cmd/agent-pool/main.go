@@ -96,15 +96,10 @@ func cmdMCP() {
 		os.Exit(1)
 	}
 
-	// MCP server logs to stderr — stdout is the MCP transport
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
 	cfg := &agentmcp.ServerConfig{
 		PoolDir:    poolDir,
 		ExpertName: expertName,
-		Logger:     logger,
+		Logger:     newStderrLogger(),
 	}
 
 	if err := agentmcp.Run(context.Background(), cfg); err != nil {
@@ -126,17 +121,13 @@ func cmdFlush() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
 	cfg := &hooks.FlushConfig{
 		PoolDir:    poolDir,
 		ExpertName: expertName,
 		TaskID:     taskID,
 	}
 
-	if err := hooks.Flush(logger, cfg); err != nil {
+	if err := hooks.Flush(newStderrLogger(), cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "flush error: %v\n", err)
 		os.Exit(1)
 	}
@@ -155,20 +146,24 @@ func cmdGuard() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
 	cfg := &hooks.GuardConfig{
 		PoolDir:    poolDir,
 		ExpertName: expertName,
 		FilePath:   filePath,
 	}
 
-	if err := hooks.Guard(logger, cfg); err != nil {
+	if err := hooks.Guard(newStderrLogger(), cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "guard denied: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// newStderrLogger creates a JSON logger writing to stderr.
+// Used by subcommands where stdout is reserved (MCP transport) or not needed.
+func newStderrLogger() *slog.Logger {
+	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
 }
 
 // parseFlags extracts named --flag value pairs from os.Args[start:].
