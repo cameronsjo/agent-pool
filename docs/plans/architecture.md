@@ -670,6 +670,7 @@ mkdir -p ~/.agent-pool/experts/legal/{inbox,logs}
 - **Integration model:** External only. CLI, MCP, hooks, plugin. No Claude Code source modification.
 - **Read vs write paths:** Questions go directly from concierge to experts. Feature work routes through the architect for contracts and verification.
 - **Concierge persistence:** Only role that uses `--resume`. Everything else is ephemeral `claude -p`.
+- **Ephemeral sessions over MCP server mode:** Claude Code can run as an MCP server (`tools/list` + `tools/call`), but this exposes individual tools, not agentic reasoning. Experts need the full agentic loop (reason → pick tools → execute → iterate), which only happens in `claude -p`. Using MCP server mode would require reimplementing the query engine in Go. Persistent sessions also reintroduce the context accumulation problem Agent Pool exists to solve. MCP is used as the communication layer between roles and the daemon, not as the execution model. See ADR `docs/adr/0001-ephemeral-sessions-over-mcp-server.md`.
 
 ## Open Questions
 
