@@ -22,12 +22,14 @@ import (
 
 // SpawnConfig holds everything needed to spawn an expert session.
 type SpawnConfig struct {
-	Name         string
-	Model        string
-	AllowedTools []string
-	ProjectDir   string        // working directory for claude
-	ExpertDir    string        // contains identity.md, state.md, errors.md
-	TaskMessage  *mail.Message // the task to execute
+	Name          string
+	Model         string
+	AllowedTools  []string
+	ProjectDir    string        // working directory for claude
+	ExpertDir     string        // contains identity.md, state.md, errors.md
+	PoolDir       string        // pool root directory (set as AGENT_POOL_DIR env var)
+	TaskMessage   *mail.Message // the task to execute
+	MCPConfigPath string        // path to MCP config JSON; if set, --mcp-config is added
 }
 
 // Result holds the outcome of an expert session.
@@ -133,6 +135,10 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		args = append(args, "--allowedTools", strings.Join(cfg.AllowedTools, ","))
 	}
 
+	if cfg.MCPConfigPath != "" {
+		args = append(args, "--mcp-config", cfg.MCPConfigPath)
+	}
+
 	cmd := exec.CommandContext(ctx, claudePath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Dir = cfg.ProjectDir
@@ -141,6 +147,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	cmd.Env = append(os.Environ(),
 		"AGENT_POOL_EXPERT="+cfg.Name,
 		"AGENT_POOL_TASK_ID="+cfg.TaskMessage.ID,
+		"AGENT_POOL_DIR="+cfg.PoolDir,
 	)
 
 	var stdout, stderr bytes.Buffer
