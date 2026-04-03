@@ -40,7 +40,7 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 	info, err := os.Stat(statePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			logger.Warn("Expert has no state.md after session",
+			logger.Warn("Skipping state flush. Reason: state.md does not exist",
 				"expert", cfg.ExpertName,
 				"task_id", cfg.TaskID,
 			)
@@ -53,13 +53,13 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 	// A healthy session updates state via pool_update_state MCP tool.
 	staleThreshold := 30 * time.Minute
 	if time.Since(info.ModTime()) > staleThreshold {
-		logger.Warn("Expert state.md appears stale after session",
+		logger.Warn("Detected stale state.md after session",
 			"expert", cfg.ExpertName,
 			"task_id", cfg.TaskID,
 			"last_modified", info.ModTime().UTC().Format(time.RFC3339),
 		)
 	} else {
-		logger.Info("Expert state verified after session",
+		logger.Info("Successfully verified expert state",
 			"expert", cfg.ExpertName,
 			"task_id", cfg.TaskID,
 		)

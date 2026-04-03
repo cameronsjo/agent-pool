@@ -30,10 +30,9 @@ func Guard(logger *slog.Logger, cfg *GuardConfig) error {
 		return fmt.Errorf("expert name is required")
 	}
 
-	logger.Debug("Code ownership check",
+	logger.Debug("Allowing file access",
 		"expert", cfg.ExpertName,
 		"path", cfg.FilePath,
-		"decision", "allow",
 	)
 
 	return nil

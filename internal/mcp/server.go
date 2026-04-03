@@ -47,7 +47,7 @@ func Run(ctx context.Context, cfg *ServerConfig) error {
 
 	RegisterExpertTools(srv, cfg)
 
-	cfg.Logger.Info("Starting MCP server",
+	cfg.Logger.Info("Preparing to serve MCP tools",
 		"pool_dir", cfg.PoolDir,
 		"expert", cfg.ExpertName,
 	)
