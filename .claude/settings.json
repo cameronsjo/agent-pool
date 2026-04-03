@@ -3,15 +3,23 @@
     "PostToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "case \"$CLAUDE_FILE_PATH\" in *.go) command -v goimports >/dev/null 2>&1 && goimports -w \"$CLAUDE_FILE_PATH\" ;; esac",
-        "description": "Auto-format Go files on edit"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_FILE_PATH\" in *.go) command -v goimports >/dev/null 2>&1 && goimports -w \"$CLAUDE_FILE_PATH\" ;; esac"
+          }
+        ]
       }
     ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "command": "case \"$CLAUDE_FILE_PATH\" in */docs/plans/architecture.md) echo 'BLOCK: Architecture doc requires explicit approval to edit' && exit 1 ;; esac; exit 0",
-        "description": "Protect architecture doc from accidental edits"
+        "hooks": [
+          {
+            "type": "command",
+            "command": "case \"$CLAUDE_FILE_PATH\" in */docs/plans/architecture.md) echo 'BLOCK: Architecture doc requires explicit approval to edit' && exit 1 ;; esac; exit 0"
+          }
+        ]
       }
     ]
   }
