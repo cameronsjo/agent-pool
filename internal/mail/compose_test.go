@@ -8,6 +8,8 @@
 //   - Default timestamp applied when zero
 //   - Body with special characters (pipes, dashes) survives round-trip
 //   - Contracts and DependsOn omitted when empty
+//   - Round-trip: cancel message with Cancels field
+//   - Cancels omitted when empty
 
 package mail_test
 
@@ -181,6 +183,60 @@ func TestCompose_BodyWithSpecialChars(t *testing.T) {
 
 	if parsed.Body != msg.Body {
 		t.Errorf("Body mismatch.\nGot:  %q\nWant: %q", parsed.Body, msg.Body)
+	}
+}
+
+func TestCompose_RoundTripCancel(t *testing.T) {
+	original := &mail.Message{
+		ID:        "cancel-001",
+		From:      "architect",
+		To:        "auth",
+		Type:      mail.TypeCancel,
+		Cancels:   "task-042",
+		Priority:  mail.PriorityNormal,
+		Timestamp: time.Date(2026, 4, 3, 12, 0, 0, 0, time.UTC),
+		Body:      "Cancel the token endpoint work.",
+	}
+
+	composed, err := mail.Compose(original)
+	if err != nil {
+		t.Fatalf("Compose error: %v", err)
+	}
+
+	parsed, err := mail.Parse(composed, "test.md")
+	if err != nil {
+		t.Fatalf("Parse error: %v\n\nComposed:\n%s", err, composed)
+	}
+
+	if parsed.Type != mail.TypeCancel {
+		t.Errorf("Type = %q, want %q", parsed.Type, mail.TypeCancel)
+	}
+	if parsed.Cancels != original.Cancels {
+		t.Errorf("Cancels = %q, want %q", parsed.Cancels, original.Cancels)
+	}
+	if parsed.Body != original.Body {
+		t.Errorf("Body = %q, want %q", parsed.Body, original.Body)
+	}
+}
+
+func TestCompose_OmitsCancelsWhenEmpty(t *testing.T) {
+	msg := &mail.Message{
+		ID:        "task-001",
+		From:      "architect",
+		To:        "auth",
+		Type:      mail.TypeTask,
+		Priority:  mail.PriorityNormal,
+		Timestamp: time.Now().UTC(),
+		Body:      "Simple task",
+	}
+
+	composed, err := mail.Compose(msg)
+	if err != nil {
+		t.Fatalf("Compose error: %v", err)
+	}
+
+	if strings.Contains(composed, "cancels") {
+		t.Errorf("composed output should omit empty cancels field:\n%s", composed)
 	}
 }
 

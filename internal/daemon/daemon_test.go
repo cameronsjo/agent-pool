@@ -757,6 +757,221 @@ project_dir = "` + poolDir + `"
 	shutdownDaemon(t, cancel, errCh)
 }
 
+// writeCancelMessage writes a cancel mail file targeting a specific task.
+func writeCancelMessage(t *testing.T, dir, cancelID, targetID, from, to string) string {
+	t.Helper()
+	content := fmt.Sprintf(`---
+id: %s
+from: %s
+to: %s
+type: cancel
+cancels: %s
+timestamp: 2026-04-01T15:00:00Z
+---
+
+Cancel %s.
+`, cancelID, from, to, targetID, targetID)
+	path := filepath.Join(dir, cancelID+".md")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing cancel message %s: %v", cancelID, err)
+	}
+	return path
+}
+
+func TestDaemon_CancelPendingTask(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Route a blocked task (has dependency on non-existent task) so it stays
+	// in the inbox without being spawned.
+	blockedContent := `---
+id: task-cancel-target
+from: architect
+to: auth
+type: task
+depends-on: [task-prereq-999]
+timestamp: 2026-04-01T14:32:00Z
+---
+
+This task is blocked and will be cancelled.
+`
+	os.WriteFile(filepath.Join(postDir, "task-cancel-target.md"), []byte(blockedContent), 0o644)
+
+	// Wait for the task to be routed to inbox
+	inboxFile := filepath.Join(poolDir, "experts", "auth", "inbox", "task-cancel-target.md")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(inboxFile); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Wait for taskboard to reflect blocked status
+	time.Sleep(500 * time.Millisecond)
+
+	// Now send a cancel message
+	writeCancelMessage(t, postDir, "cancel-001", "task-cancel-target", "architect", "auth")
+
+	// Wait for cancel to be processed (cancel file removed from postoffice)
+	cancelPostPath := filepath.Join(postDir, "cancel-001.md")
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(cancelPostPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Allow processing
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: taskboard shows cancelled
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-cancel-target"]
+	if !ok {
+		t.Fatal("task-cancel-target not found in taskboard")
+	}
+	if task.Status != "cancelled" {
+		t.Errorf("Status = %q, want %q", task.Status, "cancelled")
+	}
+
+	// Verify: inbox file was removed by the cancel handler
+	if _, err := os.Stat(inboxFile); !os.IsNotExist(err) {
+		t.Error("inbox file should have been removed after cancellation")
+	}
+
+	// Verify: expert was never spawned for the cancelled task
+	for _, c := range fake.getCalls() {
+		if c.TaskMessage.ID == "task-cancel-target" {
+			t.Error("expert should not have been spawned for cancelled task")
+		}
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_CancelActiveTask(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, _ := config.LoadPool(poolDir)
+	gate := make(chan struct{})
+	fake := &fakeSpawner{gate: gate}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	postDir := filepath.Join(poolDir, "postoffice")
+
+	// Route a task — it will be picked up and the spawner will block on gate
+	writeMessage(t, postDir, "task-active-cancel", "architect", "auth")
+
+	// Wait for the task to reach active status in the taskboard
+	boardPath := filepath.Join(poolDir, "taskboard.json")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(boardPath)
+		if err == nil {
+			var b taskboard.Board
+			if json.Unmarshal(data, &b) == nil {
+				if task, ok := b.Tasks["task-active-cancel"]; ok && task.Status == "active" {
+					break
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Send cancel while the task is active (spawner blocked on gate)
+	writeCancelMessage(t, postDir, "cancel-active-001", "task-active-cancel", "architect", "auth")
+
+	// Wait for cancel message to be consumed
+	cancelPostPath := filepath.Join(postDir, "cancel-active-001.md")
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(cancelPostPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	// Ungate — let the spawner complete
+	close(gate)
+
+	// Wait for spawn to complete
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: expert completed (cancel is a no-op for active)
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected spawner to be called for active task")
+	}
+	if calls[0].TaskMessage.ID != "task-active-cancel" {
+		t.Errorf("expected task ID 'task-active-cancel', got %q", calls[0].TaskMessage.ID)
+	}
+
+	// Verify: taskboard has cancel_note set but task completed normally
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-active-cancel"]
+	if !ok {
+		t.Fatal("task-active-cancel not found in taskboard")
+	}
+	if task.CancelNote != "cancel requested while active" {
+		t.Errorf("CancelNote = %q, want %q", task.CancelNote, "cancel requested while active")
+	}
+	// Task should be completed since the spawner succeeded
+	if task.Status != "completed" {
+		t.Errorf("Status = %q, want %q", task.Status, "completed")
+	}
+}
+
 func TestDaemon_BlockedTaskNotSpawned(t *testing.T) {
 	poolDir := t.TempDir()
 

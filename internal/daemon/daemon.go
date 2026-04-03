@@ -158,9 +158,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 }
 
 // handlePostoffice routes a message from the postoffice to the recipient's inbox
-// and registers task-type messages in the taskboard.
+// and registers task-type messages in the taskboard. Cancel messages are
+// intercepted and consumed by the daemon — they are never routed to inboxes.
 func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
-	msg, err := mail.Route(d.logger, d.poolDir, path)
+	// Parse first to check for cancel messages before routing.
+	msg, err := mail.ParseFile(path)
+	if err != nil {
+		d.logger.Error("Failed to parse postoffice message",
+			"path", path,
+			"error", err,
+		)
+		return
+	}
+
+	if msg.Type == mail.TypeCancel {
+		d.handleCancel(msg, path)
+		return
+	}
+
+	// Non-cancel: route to recipient inbox.
+	routed, err := mail.Route(d.logger, d.poolDir, path)
 	if err != nil {
 		d.logger.Error("Failed to route message",
 			"path", path,
@@ -170,13 +187,85 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 	}
 
 	d.logger.Info("Successfully routed message",
-		"id", msg.ID,
-		"to", msg.To,
+		"id", routed.ID,
+		"to", routed.To,
 	)
 
-	if msg.Type == mail.TypeTask || msg.Type == mail.TypeQuestion {
-		d.registerTask(msg)
+	if routed.Type == mail.TypeTask || routed.Type == mail.TypeQuestion {
+		d.registerTask(routed)
 	}
+}
+
+// handleCancel processes a cancel message: updates the taskboard, removes any
+// pending inbox file, and deletes the cancel message from the postoffice.
+func (d *Daemon) handleCancel(msg *mail.Message, cancelPath string) {
+	targetID := msg.Cancels
+	if targetID == "" {
+		d.logger.Warn("Skipping cancel message. Reason: missing cancels field",
+			"id", msg.ID,
+		)
+		os.Remove(cancelPath)
+		return
+	}
+
+	d.mu.Lock()
+	task, ok := d.board.Get(targetID)
+	if !ok {
+		d.mu.Unlock()
+		d.logger.Info("Skipping cancel. Reason: target task not found in taskboard",
+			"cancel_id", msg.ID,
+			"target_id", targetID,
+		)
+		os.Remove(cancelPath)
+		return
+	}
+
+	switch task.Status {
+	case taskboard.StatusPending, taskboard.StatusBlocked:
+		task.Status = taskboard.StatusCancelled
+		now := time.Now().UTC()
+		task.CompletedAt = &now
+
+		d.board.EvaluateDeps()
+		d.board.Save(d.boardPath)
+		d.mu.Unlock()
+
+		// Remove the inbox file for this task if it exists.
+		inboxPath := filepath.Join(mail.ResolveInbox(d.poolDir, task.Expert), targetID+".md")
+		if err := os.Remove(inboxPath); err != nil && !os.IsNotExist(err) {
+			d.logger.Warn("Failed to remove inbox file for cancelled task",
+				"task_id", targetID,
+				"path", inboxPath,
+				"error", err,
+			)
+		}
+
+		d.logger.Info("Successfully cancelled task",
+			"cancel_id", msg.ID,
+			"target_id", targetID,
+		)
+
+	case taskboard.StatusActive:
+		task.CancelNote = "cancel requested while active"
+		d.board.Save(d.boardPath)
+		d.mu.Unlock()
+
+		d.logger.Warn("Cancel requested for active task, noting for post-completion review",
+			"cancel_id", msg.ID,
+			"target_id", targetID,
+		)
+
+	default:
+		// Already completed, failed, or cancelled — no-op.
+		d.mu.Unlock()
+		d.logger.Info("Skipping cancel. Reason: task already terminal",
+			"cancel_id", msg.ID,
+			"target_id", targetID,
+			"status", task.Status,
+		)
+	}
+
+	os.Remove(cancelPath)
 }
 
 // registerTask adds a task-type message to the taskboard.

@@ -53,6 +53,7 @@ func Compose(msg *Message) (string, error) {
 		Contracts: msg.Contracts,
 		Priority:  priority,
 		DependsOn: msg.DependsOn,
+		Cancels:   msg.Cancels,
 		Timestamp: timestamp,
 	}
 
@@ -85,5 +86,6 @@ type composeHeader struct {
 	Contracts []string    `yaml:"contracts,omitempty"`
 	Priority  Priority    `yaml:"priority"`
 	DependsOn []string    `yaml:"depends-on,omitempty"`
+	Cancels   string      `yaml:"cancels,omitempty"`
 	Timestamp time.Time   `yaml:"timestamp"`
 }

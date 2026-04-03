@@ -279,6 +279,7 @@ func TestParseFile_NotFound(t *testing.T) {
 //   [x] Happy: unknown fields are ignored (TestParse_UnknownFieldsIgnored)
 //   [x] Boundary: all message types parse correctly (TestParse_AllMessageTypes)
 //   [x] Invalid: opening delimiter with trailing text (TestParse_DelimiterTrailingText)
+//   [x] Happy: cancels field parsed on cancel message (TestParse_CancelsField)
 //   [ ] Fuzz: Parse accepts arbitrary string input — candidate for go fuzzing
 //
 // ParseFile (Classification: I/O BOUNDARY)
@@ -398,6 +399,30 @@ Body.
 	_, err := mail.Parse(content, "")
 	if err == nil {
 		t.Fatal("expected error for delimiter with trailing text")
+	}
+}
+
+func TestParse_CancelsField(t *testing.T) {
+	content := `---
+id: cancel-001
+from: architect
+to: auth
+type: cancel
+cancels: task-042
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Cancel the token endpoint work.
+`
+	msg, err := mail.Parse(content, "test.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if msg.Type != mail.TypeCancel {
+		t.Errorf("Type = %q, want %q", msg.Type, mail.TypeCancel)
+	}
+	if msg.Cancels != "task-042" {
+		t.Errorf("Cancels = %q, want %q", msg.Cancels, "task-042")
 	}
 }
 
