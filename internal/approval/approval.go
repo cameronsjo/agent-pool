@@ -14,6 +14,7 @@ package approval
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,6 +32,7 @@ type Gate struct {
 	ApprovalsDir string
 	PollInterval time.Duration
 	Timeout      time.Duration
+	Logger       *slog.Logger
 }
 
 // DefaultGate returns a Gate with sensible defaults.
@@ -39,6 +41,7 @@ func DefaultGate(poolDir string) *Gate {
 		ApprovalsDir: filepath.Join(poolDir, "approvals"),
 		PollInterval: 2 * time.Second,
 		Timeout:      5 * time.Minute,
+		Logger:       slog.Default(),
 	}
 }
 
@@ -46,9 +49,18 @@ func DefaultGate(poolDir string) *Gate {
 // response. It blocks until approved, rejected, or the context is cancelled.
 // Returns nil if approved, an error if rejected or timed out.
 func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
+	logger := g.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	if err := os.MkdirAll(g.ApprovalsDir, 0o755); err != nil {
 		return fmt.Errorf("creating approvals dir: %w", err)
 	}
+
+	logger.Debug("Preparing to submit approval request",
+		"proposal_id", proposalID,
+	)
 
 	// Write proposal content — this also triggers the daemon via fsnotify
 	// (the file ends in .md, which the watcher accepts)
@@ -56,6 +68,11 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 	if err := os.WriteFile(proposalPath, []byte(proposal), 0o644); err != nil {
 		return fmt.Errorf("writing proposal: %w", err)
 	}
+
+	logger.Info("Successfully submitted approval request, waiting for response",
+		"proposal_id", proposalID,
+		"timeout", g.Timeout,
+	)
 
 	// Poll for response
 	approvedPath := filepath.Join(g.ApprovalsDir, proposalID+".approved")
@@ -79,26 +96,30 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 	for {
 		select {
 		case <-deadlineCtx.Done():
-			// Clean up proposal files on timeout
 			os.Remove(proposalPath)
-			
+			logger.Warn("Approval request timed out",
+				"proposal_id", proposalID,
+				"timeout", timeout,
+			)
 			return fmt.Errorf("approval timed out after %v", timeout)
 
 		case <-ticker.C:
 			if _, err := os.Stat(approvedPath); err == nil {
-				// Clean up all approval files
 				os.Remove(proposalPath)
-				
 				os.Remove(approvedPath)
+				logger.Info("Successfully received approval",
+					"proposal_id", proposalID,
+				)
 				return nil
 			}
 			if _, err := os.Stat(rejectedPath); err == nil {
-				// Read rejection reason if available
 				reason, _ := os.ReadFile(rejectedPath)
-				// Clean up
 				os.Remove(proposalPath)
-				
 				os.Remove(rejectedPath)
+				logger.Warn("Approval request rejected",
+					"proposal_id", proposalID,
+					"reason", string(reason),
+				)
 				if len(reason) > 0 {
 					return fmt.Errorf("proposal rejected: %s", string(reason))
 				}

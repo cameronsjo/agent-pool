@@ -2,6 +2,7 @@ package contract
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,13 +12,23 @@ import (
 
 // Store manages contract files in a pool's contracts/ directory.
 type Store struct {
-	dir string
+	dir    string
+	logger *slog.Logger
 }
 
 // NewStore creates a Store for the given pool directory.
 // The contracts directory is {poolDir}/contracts/.
 func NewStore(poolDir string) *Store {
-	return &Store{dir: filepath.Join(poolDir, "contracts")}
+	return &Store{
+		dir:    filepath.Join(poolDir, "contracts"),
+		logger: slog.Default(),
+	}
+}
+
+// WithLogger sets a custom logger on the Store.
+func (s *Store) WithLogger(l *slog.Logger) *Store {
+	s.logger = l
+	return s
 }
 
 // Save writes a contract to disk and updates the index.
@@ -27,6 +38,12 @@ func (s *Store) Save(c *Contract) error {
 	if c == nil {
 		return fmt.Errorf("contract is nil")
 	}
+
+	s.logger.Debug("Preparing to save contract",
+		"contract_id", c.ID,
+		"version", c.Version,
+		"between", c.Between,
+	)
 
 	path := filepath.Join(s.dir, c.ID+".md")
 
@@ -51,17 +68,32 @@ func (s *Store) Save(c *Contract) error {
 		return fmt.Errorf("writing contract file: %w", err)
 	}
 
-	return s.UpdateIndex()
+	if err := s.UpdateIndex(); err != nil {
+		return err
+	}
+
+	s.logger.Info("Successfully saved contract",
+		"contract_id", c.ID,
+		"version", c.Version,
+		"between", c.Between,
+	)
+
+	return nil
 }
 
 // Amend loads an existing contract, increments its version, updates the body
 // and timestamp, saves it, and returns the updated contract.
 func (s *Store) Amend(id string, newBody string) (*Contract, error) {
+	s.logger.Debug("Preparing to amend contract",
+		"contract_id", id,
+	)
+
 	c, err := s.Load(id)
 	if err != nil {
 		return nil, fmt.Errorf("loading contract for amendment: %w", err)
 	}
 
+	previousVersion := c.Version
 	c.Version++
 	c.Body = newBody
 	c.Timestamp = time.Now().UTC()
@@ -79,6 +111,13 @@ func (s *Store) Amend(id string, newBody string) (*Contract, error) {
 	if err := s.UpdateIndex(); err != nil {
 		return nil, fmt.Errorf("updating index: %w", err)
 	}
+
+	s.logger.Info("Successfully amended contract",
+		"contract_id", id,
+		"previous_version", previousVersion,
+		"new_version", c.Version,
+		"between", c.Between,
+	)
 
 	return c, nil
 }
@@ -109,7 +148,11 @@ func (s *Store) List() ([]*Contract, error) {
 		}
 		c, err := ParseFile(filepath.Join(s.dir, entry.Name()))
 		if err != nil {
-			continue // skip malformed contracts
+			s.logger.Warn("Skipping malformed contract file",
+				"file", entry.Name(),
+				"error", err,
+			)
+			continue
 		}
 		contracts = append(contracts, c)
 	}

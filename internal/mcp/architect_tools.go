@@ -24,7 +24,7 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 		return
 	}
 
-	store := contract.NewStore(cfg.PoolDir)
+	store := contract.NewStore(cfg.PoolDir).WithLogger(cfg.Logger)
 
 	srv.AddTool(
 		mcp.NewTool("pool_define_contract",
@@ -166,6 +166,7 @@ func handleSendTask(cfg *ServerConfig) server.ToolHandlerFunc {
 		// Approval gate: block on human approval if required
 		if shouldRequireApproval(cfg.ApprovalMode) {
 			gate := approval.DefaultGate(cfg.PoolDir)
+			gate.Logger = cfg.Logger
 			proposalSummary := fmt.Sprintf("Task: %s\nTo: %s\nPriority: %s\nContracts: %s\n\n%s",
 				id, to, priority, strings.Join(contracts, ", "), body)
 			if gateErr := gate.Request(ctx, id, proposalSummary); gateErr != nil {
