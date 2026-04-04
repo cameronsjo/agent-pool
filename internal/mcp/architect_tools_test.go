@@ -1,0 +1,403 @@
+// Architect tools coverage matrix:
+//
+// RegisterArchitectTools (Classification: INTEGRATION)
+//   [x] Happy: all 4 architect tools + 6 expert tools registered (TestArchitectTools_Registration)
+//
+// pool_define_contract (Classification: FILESYSTEM I/O)
+//   [x] Happy: creates contract file and index (TestDefineContract_Happy)
+//   [x] Error: missing params (TestDefineContract_MissingParams)
+//   [x] Error: fewer than 2 between parties (TestDefineContract_TooFewBetween)
+//
+// pool_send_task (Classification: FILESYSTEM I/O)
+//   [x] Happy: message appears in postoffice (TestSendTask_Happy)
+//   [x] Error: missing params (TestSendTask_MissingParams)
+//   [x] Error: path traversal ID (TestSendTask_PathTraversal)
+//
+// pool_verify_result (Classification: FILESYSTEM I/O)
+//   [x] Happy: verification log created (TestVerifyResult_Happy)
+//   [x] Error: invalid status (TestVerifyResult_InvalidStatus)
+//   [x] Error: contract not found (TestVerifyResult_ContractNotFound)
+//
+// pool_amend_contract (Classification: FILESYSTEM I/O)
+//   [x] Happy: version incremented + notify messages (TestAmendContract_Happy)
+//   [x] Error: contract not found (TestAmendContract_NotFound)
+
+package mcp_test
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+
+	"git.sjo.lol/cameron/agent-pool/internal/contract"
+	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+)
+
+// setupArchitectPool creates a pool directory with architect-relevant dirs.
+func setupArchitectPool(t *testing.T) string {
+	t.Helper()
+	poolDir := t.TempDir()
+	for _, dir := range []string{
+		"postoffice",
+		"contracts",
+		"architect/inbox",
+		"architect/verifications",
+		"experts/architect/logs",
+	} {
+		if err := os.MkdirAll(filepath.Join(poolDir, dir), 0o755); err != nil {
+			t.Fatalf("creating %s: %v", dir, err)
+		}
+	}
+	return poolDir
+}
+
+// buildArchitectTestServer creates an MCP server with both expert and architect
+// tools registered. Follows the same pattern as buildTestServer.
+func buildArchitectTestServer(t *testing.T, poolDir string) *server.MCPServer {
+	t.Helper()
+	cfg := &agentmcp.ServerConfig{
+		PoolDir:      poolDir,
+		ExpertName:   "architect",
+		Role:         "architect",
+		ApprovalMode: "none",
+		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	srv := server.NewMCPServer("agent-pool-test", "0.4.0-test")
+	agentmcp.RegisterExpertTools(srv, cfg)
+	agentmcp.RegisterArchitectTools(srv, cfg)
+
+	// Initialize (MCP handshake)
+	initMsg := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]any{},
+			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
+		},
+	})
+	srv.HandleMessage(context.Background(), initMsg)
+
+	return srv
+}
+
+// listArchitectToolNames sends a tools/list request and returns tool names.
+func listArchitectToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
+	t.Helper()
+
+	msg := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      99,
+		"method":  "tools/list",
+		"params":  map[string]any{},
+	})
+
+	resp := srv.HandleMessage(context.Background(), msg)
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshaling list response: %v", err)
+	}
+
+	var rpcResp struct {
+		Result *mcp.ListToolsResult `json:"result"`
+	}
+	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
+		t.Fatalf("unmarshaling list response: %v", err)
+	}
+
+	names := make(map[string]bool)
+	if rpcResp.Result != nil {
+		for _, tool := range rpcResp.Result.Tools {
+			names[tool.Name] = true
+		}
+	}
+	return names
+}
+
+func TestArchitectTools_Registration(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	tools := listArchitectToolNames(t, srv)
+
+	expected := []string{
+		// Architect tools
+		"pool_define_contract", "pool_send_task",
+		"pool_verify_result", "pool_amend_contract",
+		// Expert tools (inherited)
+		"pool_read_state", "pool_update_state",
+		"pool_append_error", "pool_send_response",
+		"pool_recall", "pool_search_index",
+	}
+	for _, name := range expected {
+		if !tools[name] {
+			t.Errorf("missing tool: %s", name)
+		}
+	}
+}
+
+func TestDefineContract_Happy(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_define_contract", map[string]any{
+		"id":      "contract-001",
+		"between": "auth, frontend",
+		"body":    "## Token Exchange\n\nSpec goes here.",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "contract-001") {
+		t.Errorf("result %q does not mention contract ID", text)
+	}
+
+	// Verify file
+	c, err := contract.ParseFile(filepath.Join(poolDir, "contracts", "contract-001.md"))
+	if err != nil {
+		t.Fatalf("parsing contract: %v", err)
+	}
+	if c.Version != 1 {
+		t.Errorf("version = %d, want 1", c.Version)
+	}
+	if len(c.Between) != 2 {
+		t.Errorf("between length = %d, want 2", len(c.Between))
+	}
+}
+
+func TestDefineContract_MissingParams(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_define_contract", map[string]any{
+		"between": "auth, frontend",
+		"body":    "spec",
+	})
+	if !result.IsError {
+		t.Error("expected error for missing id")
+	}
+}
+
+func TestDefineContract_TooFewBetween(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_define_contract", map[string]any{
+		"id":      "c1",
+		"between": "only-one",
+		"body":    "spec",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "at least 2") {
+		t.Errorf("expected 'at least 2' error, got %q", text)
+	}
+}
+
+func TestSendTask_Happy(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_send_task", map[string]any{
+		"to":        "auth",
+		"body":      "Implement the token endpoint",
+		"id":        "task-001",
+		"contracts": "contract-001",
+		"priority":  "high",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "task-001") {
+		t.Errorf("result %q does not mention task ID", text)
+	}
+
+	// Verify message in postoffice
+	msg, err := mail.ParseFile(filepath.Join(poolDir, "postoffice", "task-001.md"))
+	if err != nil {
+		t.Fatalf("parsing posted message: %v", err)
+	}
+
+	if msg.From != "architect" {
+		t.Errorf("from = %q, want architect", msg.From)
+	}
+	if msg.To != "auth" {
+		t.Errorf("to = %q, want auth", msg.To)
+	}
+	if msg.Type != mail.TypeTask {
+		t.Errorf("type = %q, want task", msg.Type)
+	}
+	if len(msg.Contracts) != 1 || msg.Contracts[0] != "contract-001" {
+		t.Errorf("contracts = %v, want [contract-001]", msg.Contracts)
+	}
+	if msg.Priority != mail.PriorityHigh {
+		t.Errorf("priority = %q, want high", msg.Priority)
+	}
+}
+
+func TestSendTask_MissingParams(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_send_task", map[string]any{
+		"to":   "auth",
+		"body": "do something",
+	})
+	if !result.IsError {
+		t.Error("expected error for missing id")
+	}
+}
+
+func TestSendTask_PathTraversal(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_send_task", map[string]any{
+		"to":   "auth",
+		"body": "do something",
+		"id":   "../escape",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "invalid message ID") {
+		t.Errorf("expected path traversal error, got %q", text)
+	}
+}
+
+func TestVerifyResult_Happy(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	// Create a contract first
+	callTool(t, srv, "pool_define_contract", map[string]any{
+		"id":      "contract-001",
+		"between": "auth, frontend",
+		"body":    "spec",
+	})
+
+	result := callTool(t, srv, "pool_verify_result", map[string]any{
+		"task_id":     "task-001",
+		"contract_id": "contract-001",
+		"status":      "pass",
+		"notes":       "All endpoints match the contract spec.",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "pass") {
+		t.Errorf("result %q does not mention pass", text)
+	}
+
+	// Verify log file
+	path := filepath.Join(poolDir, "architect", "verifications", "task-001_contract-001.md")
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("verification file not found: %v", err)
+	}
+}
+
+func TestVerifyResult_InvalidStatus(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_verify_result", map[string]any{
+		"task_id":     "task-001",
+		"contract_id": "contract-001",
+		"status":      "unknown",
+		"notes":       "notes",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "invalid status") {
+		t.Errorf("expected invalid status error, got %q", text)
+	}
+}
+
+func TestVerifyResult_ContractNotFound(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_verify_result", map[string]any{
+		"task_id":     "task-001",
+		"contract_id": "nonexistent",
+		"status":      "pass",
+		"notes":       "notes",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "not found") {
+		t.Errorf("expected not found error, got %q", text)
+	}
+}
+
+func TestAmendContract_Happy(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	// Create initial contract
+	callTool(t, srv, "pool_define_contract", map[string]any{
+		"id":      "contract-001",
+		"between": "auth, frontend",
+		"body":    "v1 spec",
+	})
+
+	result := callTool(t, srv, "pool_amend_contract", map[string]any{
+		"id":   "contract-001",
+		"body": "## Updated spec v2\n\nNew content.",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "v2") {
+		t.Errorf("result %q does not mention v2", text)
+	}
+
+	// Verify version bumped
+	c, err := contract.ParseFile(filepath.Join(poolDir, "contracts", "contract-001.md"))
+	if err != nil {
+		t.Fatalf("loading amended contract: %v", err)
+	}
+	if c.Version != 2 {
+		t.Errorf("version = %d, want 2", c.Version)
+	}
+
+	// Verify notify messages in postoffice
+	entries, err := os.ReadDir(filepath.Join(poolDir, "postoffice"))
+	if err != nil {
+		t.Fatalf("reading postoffice: %v", err)
+	}
+
+	notifyCount := 0
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "notify-") {
+			notifyCount++
+			msg, parseErr := mail.ParseFile(filepath.Join(poolDir, "postoffice", e.Name()))
+			if parseErr != nil {
+				t.Errorf("parsing notify %s: %v", e.Name(), parseErr)
+				continue
+			}
+			if msg.Type != mail.TypeNotify {
+				t.Errorf("notify type = %q, want notify", msg.Type)
+			}
+			if msg.From != "architect" {
+				t.Errorf("notify from = %q, want architect", msg.From)
+			}
+		}
+	}
+	if notifyCount != 2 {
+		t.Errorf("notify count = %d, want 2 (one per party)", notifyCount)
+	}
+}
+
+func TestAmendContract_NotFound(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_amend_contract", map[string]any{
+		"id":   "nonexistent",
+		"body": "new body",
+	})
+	if !result.IsError {
+		t.Error("expected error for nonexistent contract")
+	}
+}
