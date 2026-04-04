@@ -84,6 +84,11 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		id := fmt.Sprintf("cq-%s-%d", expertName, time.Now().UnixNano())
 
+		cfg.Logger.Debug("Preparing to dispatch question",
+			"id", id,
+			"expert", expertName,
+		)
+
 		msg := &mail.Message{
 			ID:        id,
 			From:      "concierge",
@@ -96,16 +101,26 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		composed, err := mail.Compose(msg)
 		if err != nil {
+			cfg.Logger.Error("Failed to compose question",
+				"id", id,
+				"expert", expertName,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("composing question: %v", err)), nil
 		}
 
 		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
 		path := filepath.Join(postoffice, id+".md")
 		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
+			cfg.Logger.Error("Failed to write question to postoffice",
+				"id", id,
+				"expert", expertName,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
 		}
 
-		cfg.Logger.Info("Question dispatched, polling for response",
+		cfg.Logger.Info("Successfully dispatched question, polling for response",
 			"id", id,
 			"expert", expertName,
 		)
@@ -113,8 +128,18 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 		// Poll taskboard until the expert completes
 		result, err := pollForCompletion(ctx, cfg, id, expertName)
 		if err != nil {
+			cfg.Logger.Warn("Failed to get expert response",
+				"id", id,
+				"expert", expertName,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("waiting for expert: %v", err)), nil
 		}
+
+		cfg.Logger.Info("Successfully received expert response",
+			"id", id,
+			"expert", expertName,
+		)
 
 		return mcp.NewToolResultText(result), nil
 	}
@@ -134,6 +159,11 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 	for {
 		select {
 		case <-deadlineCtx.Done():
+			cfg.Logger.Warn("Timed out waiting for expert response",
+				"task_id", taskID,
+				"expert", expertName,
+				"timeout", defaultPollTimeout,
+			)
 			return "", fmt.Errorf("timed out after %v waiting for task %s", defaultPollTimeout, taskID)
 
 		case <-ticker.C:
@@ -157,8 +187,18 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 				if task.ExitCode != nil {
 					exitInfo = fmt.Sprintf(" (exit code: %d)", *task.ExitCode)
 				}
+				cfg.Logger.Warn("Expert task failed",
+					"task_id", taskID,
+					"expert", expertName,
+					"exit_code", task.ExitCode,
+				)
 				return "", fmt.Errorf("expert %q failed task %s%s", expertName, taskID, exitInfo)
 			case taskboard.StatusCancelled:
+				cfg.Logger.Warn("Expert task was cancelled",
+					"task_id", taskID,
+					"expert", expertName,
+					"cancel_note", task.CancelNote,
+				)
 				return "", fmt.Errorf("task %s was cancelled: %s", taskID, task.CancelNote)
 			}
 			// Still pending/blocked/active — keep polling
@@ -200,6 +240,11 @@ func handleSubmitPlan(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		id := fmt.Sprintf("cp-%d", time.Now().UnixNano())
 
+		cfg.Logger.Debug("Preparing to submit plan to architect",
+			"id", id,
+			"contract_count", len(contracts),
+		)
+
 		msg := &mail.Message{
 			ID:        id,
 			From:      "concierge",
@@ -213,16 +258,24 @@ func handleSubmitPlan(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		composed, err := mail.Compose(msg)
 		if err != nil {
+			cfg.Logger.Error("Failed to compose plan",
+				"id", id,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("composing plan: %v", err)), nil
 		}
 
 		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
 		path := filepath.Join(postoffice, id+".md")
 		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
+			cfg.Logger.Error("Failed to write plan to postoffice",
+				"id", id,
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
 		}
 
-		cfg.Logger.Info("Plan submitted to architect",
+		cfg.Logger.Info("Successfully submitted plan to architect",
 			"id", id,
 			"contracts", contracts,
 		)
@@ -240,6 +293,9 @@ func handleCheckStatus(cfg *ServerConfig) server.ToolHandlerFunc {
 		boardPath := filepath.Join(cfg.PoolDir, "taskboard.json")
 		board, err := taskboard.Load(boardPath)
 		if err != nil {
+			cfg.Logger.Error("Failed to load taskboard",
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("loading taskboard: %v", err)), nil
 		}
 
@@ -302,6 +358,9 @@ func handleListExperts(cfg *ServerConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		poolCfg, err := config.LoadPool(cfg.PoolDir)
 		if err != nil {
+			cfg.Logger.Error("Failed to load pool config",
+				"error", err,
+			)
 			return mcp.NewToolResultError(fmt.Sprintf("loading pool config: %v", err)), nil
 		}
 
