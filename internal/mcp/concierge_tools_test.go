@@ -7,6 +7,8 @@
 //   [x] Happy: question dispatched, polls taskboard, returns result (TestAskExpert_Happy)
 //   [x] Error: missing params (TestAskExpert_MissingParams)
 //   [x] Error: expert task fails (TestAskExpert_ExpertFails)
+//   [x] Error: task cancelled with note (TestAskExpert_TaskCancelled)
+//   [x] Error: context timeout (TestAskExpert_Timeout)
 //
 // pool_submit_plan (Classification: FILESYSTEM I/O)
 //   [x] Happy: plan message in postoffice, returns task ID (TestSubmitPlan_Happy)
@@ -22,10 +24,12 @@
 //
 // pool_list_experts (Classification: FILESYSTEM I/O)
 //   [x] Happy: lists pool and shared experts (TestListExperts_Happy)
+//   [x] Error: missing pool.toml (TestListExperts_MissingConfig)
 
 package mcp_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -40,6 +44,7 @@ import (
 	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 	"github.com/cameronsjo/agent-pool/internal/taskboard"
 
+	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
@@ -100,6 +105,48 @@ func fakeStreamJSON(resultText string) []byte {
 func mustMarshal(v any) string {
 	data, _ := json.Marshal(v)
 	return string(data)
+}
+
+// callToolWithContext is like callTool but accepts a custom context.
+// Used to test timeout behavior by passing a short-deadline context.
+func callToolWithContext(t *testing.T, ctx context.Context, srv *server.MCPServer, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+
+	msg := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      2,
+		"method":  "tools/call",
+		"params": map[string]any{
+			"name":      name,
+			"arguments": args,
+		},
+	})
+
+	resp := srv.HandleMessage(ctx, msg)
+	respBytes, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshaling response: %v", err)
+	}
+
+	var rpcResp struct {
+		Result *mcp.CallToolResult `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
+		t.Fatalf("unmarshaling response: %v\nraw: %s", err, string(respBytes))
+	}
+
+	if rpcResp.Error != nil {
+		t.Fatalf("JSON-RPC error: %d %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+	if rpcResp.Result == nil {
+		t.Fatalf("nil result in response: %s", string(respBytes))
+	}
+
+	return rpcResp.Result
 }
 
 // --- Registration ---
@@ -211,21 +258,23 @@ func TestAskExpert_MissingParams(t *testing.T) {
 	poolDir := setupConciergePool(t)
 	srv := buildConciergeTestServer(t, poolDir)
 
-	// Missing expert
-	result := callTool(t, srv, "pool_ask_expert", map[string]any{
-		"question": "How does auth work?",
+	t.Run("missing_expert", func(t *testing.T) {
+		result := callTool(t, srv, "pool_ask_expert", map[string]any{
+			"question": "How does auth work?",
+		})
+		if !result.IsError {
+			t.Error("expected error for missing expert")
+		}
 	})
-	if !result.IsError {
-		t.Error("expected error for missing expert")
-	}
 
-	// Missing question
-	result = callTool(t, srv, "pool_ask_expert", map[string]any{
-		"expert": "auth",
+	t.Run("missing_question", func(t *testing.T) {
+		result := callTool(t, srv, "pool_ask_expert", map[string]any{
+			"expert": "auth",
+		})
+		if !result.IsError {
+			t.Error("expected error for missing question")
+		}
 	})
-	if !result.IsError {
-		t.Error("expected error for missing question")
-	}
 }
 
 func TestAskExpert_ExpertFails(t *testing.T) {
@@ -283,6 +332,89 @@ func TestAskExpert_ExpertFails(t *testing.T) {
 	text := resultText(t, result)
 	if !strings.Contains(text, "failed") {
 		t.Errorf("error %q should mention failure", text)
+	}
+}
+
+func TestAskExpert_TaskCancelled(t *testing.T) {
+	poolDir := setupConciergePool(t)
+	srv := buildConciergeTestServer(t, poolDir)
+
+	// Goroutine creates a cancelled task entry
+	go func() {
+		postoffice := filepath.Join(poolDir, "postoffice")
+		var msgID string
+
+		for i := 0; i < 50; i++ {
+			time.Sleep(50 * time.Millisecond)
+			files, _ := filepath.Glob(filepath.Join(postoffice, "cq-auth-*.md"))
+			if len(files) > 0 {
+				msg, _ := mail.ParseFile(files[0])
+				if msg != nil {
+					msgID = msg.ID
+					break
+				}
+			}
+		}
+		if msgID == "" {
+			return
+		}
+
+		now := time.Now()
+		board := &taskboard.Board{
+			Version: 1,
+			Tasks: map[string]*taskboard.Task{
+				msgID: {
+					ID:          msgID,
+					Status:      taskboard.StatusCancelled,
+					Expert:      "auth",
+					From:        "concierge",
+					Type:        "question",
+					CreatedAt:   now.Add(-2 * time.Second),
+					CompletedAt: &now,
+					CancelNote:  "superseded by higher priority task",
+				},
+			},
+		}
+		board.Save(filepath.Join(poolDir, "taskboard.json"))
+	}()
+
+	result := callTool(t, srv, "pool_ask_expert", map[string]any{
+		"expert":   "auth",
+		"question": "How does auth work?",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for cancelled task")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "cancelled") {
+		t.Errorf("error %q should mention cancellation", text)
+	}
+	if !strings.Contains(text, "superseded") {
+		t.Errorf("error %q should include cancel note", text)
+	}
+}
+
+func TestAskExpert_Timeout(t *testing.T) {
+	poolDir := setupConciergePool(t)
+	srv := buildConciergeTestServer(t, poolDir)
+
+	// Use a short-deadline context so pollForCompletion times out quickly.
+	// The task stays pending forever (no goroutine to complete it).
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	result := callToolWithContext(t, ctx, srv, "pool_ask_expert", map[string]any{
+		"expert":   "auth",
+		"question": "This will time out",
+	})
+
+	if !result.IsError {
+		t.Error("expected error for timeout")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "timed out") {
+		t.Errorf("error %q should mention timeout", text)
 	}
 }
 
@@ -539,5 +671,20 @@ model = "sonnet"
 	shared := parsed["shared_experts"]
 	if len(shared) != 1 || shared[0] != "docs" {
 		t.Errorf("shared_experts = %v, want [docs]", shared)
+	}
+}
+
+func TestListExperts_MissingConfig(t *testing.T) {
+	poolDir := setupConciergePool(t)
+	srv := buildConciergeTestServer(t, poolDir)
+
+	// No pool.toml written — LoadPool should fail
+	result := callTool(t, srv, "pool_list_experts", map[string]any{})
+	if !result.IsError {
+		t.Error("expected error for missing pool.toml")
+	}
+	text := resultText(t, result)
+	if !strings.Contains(text, "loading pool config") {
+		t.Errorf("error %q should mention config loading failure", text)
 	}
 }
