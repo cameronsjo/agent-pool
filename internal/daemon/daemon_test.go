@@ -632,6 +632,23 @@ Pre-existing postoffice message.
 }
 
 // loadTaskboard reads the taskboard.json file from a pool directory.
+// waitForTaskStatus polls the taskboard until a task reaches the expected status.
+func waitForTaskStatus(t *testing.T, poolDir, taskID string, want taskboard.Status) {
+	t.Helper()
+	boardPath := filepath.Join(poolDir, "taskboard.json")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		board, err := taskboard.Load(boardPath)
+		if err == nil {
+			if task, ok := board.Get(taskID); ok && task.Status == want {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not reach status %q within 5s", taskID, want)
+}
+
 func loadTaskboard(t *testing.T, poolDir string) *taskboard.Board {
 	t.Helper()
 	path := filepath.Join(poolDir, "taskboard.json")
@@ -1249,6 +1266,9 @@ model = "sonnet"
 	}
 
 	close(gate)
+	// Wait for in-flight task to complete before shutdown so the daemon's
+	// goroutine finishes writing logs/taskboard and t.TempDir cleanup succeeds.
+	waitForTaskStatus(t, poolDir, "task-handoff-001", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }
 
@@ -1307,6 +1327,9 @@ model = "sonnet"
 	}
 
 	close(gate)
+	// Wait for in-flight task to complete before shutdown so the daemon's
+	// goroutine finishes writing logs/taskboard and t.TempDir cleanup succeeds.
+	waitForTaskStatus(t, poolDir, "task-escalate-001", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }
 
