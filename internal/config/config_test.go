@@ -9,6 +9,11 @@
 //   [x] Boundary: poolDir with tilde expansion
 //   [x] Happy: multiple experts configured
 //   [x] Happy: expert with custom allowed_tools
+//
+// DefaultsSection.ParseSessionTimeout (Classification: DATA TRANSFORMER)
+//   [x] Happy: valid duration "10m" (TestDefaultsSection_ParseSessionTimeout)
+//   [x] Happy: valid duration "30s" (TestDefaultsSection_ParseSessionTimeout)
+//   [x] Unhappy: invalid duration string (TestDefaultsSection_ParseSessionTimeout)
 
 package config_test
 
@@ -17,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 )
@@ -332,5 +338,38 @@ func assertSliceEqual(t *testing.T, field string, expected []string, actual []st
 		if expected[i] != actual[i] {
 			t.Errorf("%s[%d]: expected %q, got %q", field, i, expected[i], actual[i])
 		}
+	}
+}
+
+func TestDefaultsSection_ParseSessionTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    time.Duration
+		wantErr bool
+	}{
+		{"10 minutes", "10m", 10 * time.Minute, false},
+		{"30 seconds", "30s", 30 * time.Second, false},
+		{"1 hour", "1h", time.Hour, false},
+		{"invalid", "invalid", 0, true},
+		{"empty", "", 0, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := config.DefaultsSection{SessionTimeout: tc.input}
+			got, err := d.ParseSessionTimeout()
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("ParseSessionTimeout(%q) expected error", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseSessionTimeout(%q) unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseSessionTimeout(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }

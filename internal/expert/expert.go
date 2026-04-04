@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
@@ -36,6 +37,7 @@ type SpawnConfig struct {
 type Result struct {
 	TaskID   string
 	ExitCode int
+	PID      int
 	Output   []byte // raw stream-json output from stdout
 	Stderr   []byte
 	Summary  string
@@ -138,9 +140,13 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		args = append(args, "--mcp-config", cfg.MCPConfigPath)
 	}
 
-	cmd := exec.CommandContext(ctx, claudePath, args...)
+	// Use exec.Command (not CommandContext) so we control shutdown signals
+	// ourselves. CommandContext sends SIGKILL immediately, racing our SIGTERM
+	// grace period.
+	cmd := exec.Command(claudePath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Dir = cfg.ProjectDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Inherit current env + pool-specific vars
 	cmd.Env = append(os.Environ(),
@@ -161,7 +167,56 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	)
 
 	start := time.Now()
-	runErr := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting claude: %w", err)
+	}
+
+	pid := 0
+	if cmd.Process != nil {
+		pid = cmd.Process.Pid
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	var runErr error
+	cancelled := false
+	select {
+	case runErr = <-done:
+		// Normal exit
+	case <-ctx.Done():
+		cancelled = true
+		// Timeout or parent cancel — send SIGTERM to process group for graceful shutdown
+		logger.Warn("Session context cancelled, sending SIGTERM",
+			"expert", cfg.Name,
+			"task_id", cfg.TaskMessage.ID,
+			"pid", pid,
+			"reason", ctx.Err(),
+		)
+		if pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
+		}
+		// Grace period for Stop hook to flush state
+		select {
+		case runErr = <-done:
+			logger.Debug("Expert process exited after SIGTERM",
+				"expert", cfg.Name,
+				"task_id", cfg.TaskMessage.ID,
+				"pid", pid,
+			)
+		case <-time.After(10 * time.Second):
+			logger.Warn("Expert process did not exit after SIGTERM, sending SIGKILL",
+				"expert", cfg.Name,
+				"task_id", cfg.TaskMessage.ID,
+				"pid", pid,
+			)
+			if pid > 0 {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
+			}
+			runErr = <-done
+		}
+	}
+
 	duration := time.Since(start)
 
 	exitCode := 0
@@ -172,10 +227,17 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 			return nil, fmt.Errorf("running claude: %w", runErr)
 		}
 	}
+	// Cancelled sessions always get non-zero exit code, even if the process
+	// exited cleanly after SIGTERM — this ensures the inbox file is preserved
+	// for retry and the daemon marks the task as failed.
+	if cancelled && exitCode == 0 {
+		exitCode = -1
+	}
 
 	result := &Result{
 		TaskID:   cfg.TaskMessage.ID,
 		ExitCode: exitCode,
+		PID:      pid,
 		Output:   stdout.Bytes(),
 		Stderr:   stderr.Bytes(),
 		Duration: duration,

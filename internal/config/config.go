@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -57,6 +58,15 @@ type DefaultsSection struct {
 type CurationSection struct {
 	IntervalTasks int `toml:"interval_tasks"`
 	IntervalHours int `toml:"interval_hours"`
+}
+
+// ParseSessionTimeout parses the session timeout string to a time.Duration.
+func (d DefaultsSection) ParseSessionTimeout() (time.Duration, error) {
+	dur, err := time.ParseDuration(d.SessionTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("parsing defaults.session_timeout %q: %w", d.SessionTimeout, err)
+	}
+	return dur, nil
 }
 
 // ExpertSection is the per-expert config.

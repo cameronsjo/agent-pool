@@ -45,6 +45,7 @@ type Message struct {
 	Contracts []string    `yaml:"contracts,omitempty"`
 	Priority  Priority    `yaml:"priority"`
 	DependsOn []string    `yaml:"depends-on,omitempty"`
+	Cancels   string      `yaml:"cancels,omitempty"`
 	Timestamp time.Time   `yaml:"timestamp"`
 
 	// Body is the markdown content after the frontmatter.
