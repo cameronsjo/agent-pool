@@ -140,9 +140,13 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		args = append(args, "--mcp-config", cfg.MCPConfigPath)
 	}
 
-	cmd := exec.CommandContext(ctx, claudePath, args...)
+	// Use exec.Command (not CommandContext) so we control shutdown signals
+	// ourselves. CommandContext sends SIGKILL immediately, racing our SIGTERM
+	// grace period.
+	cmd := exec.Command(claudePath, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Dir = cfg.ProjectDir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	// Inherit current env + pool-specific vars
 	cmd.Env = append(os.Environ(),
@@ -176,24 +180,25 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	go func() { done <- cmd.Wait() }()
 
 	var runErr error
+	cancelled := false
 	select {
 	case runErr = <-done:
 		// Normal exit
 	case <-ctx.Done():
-		// Timeout or parent cancel — send SIGTERM for graceful shutdown
+		cancelled = true
+		// Timeout or parent cancel — send SIGTERM to process group for graceful shutdown
 		logger.Warn("Session context cancelled, sending SIGTERM",
 			"expert", cfg.Name,
 			"task_id", cfg.TaskMessage.ID,
 			"pid", pid,
 			"reason", ctx.Err(),
 		)
-		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
+		if pid > 0 {
+			_ = syscall.Kill(-pid, syscall.SIGTERM)
 		}
 		// Grace period for Stop hook to flush state
 		select {
 		case runErr = <-done:
-			// Process exited after SIGTERM
 			logger.Debug("Expert process exited after SIGTERM",
 				"expert", cfg.Name,
 				"task_id", cfg.TaskMessage.ID,
@@ -205,8 +210,8 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 				"task_id", cfg.TaskMessage.ID,
 				"pid", pid,
 			)
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
+			if pid > 0 {
+				_ = syscall.Kill(-pid, syscall.SIGKILL)
 			}
 			runErr = <-done
 		}
@@ -218,11 +223,15 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	if runErr != nil {
 		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
-		} else if ctx.Err() != nil {
-			exitCode = -1 // Killed by timeout
 		} else {
 			return nil, fmt.Errorf("running claude: %w", runErr)
 		}
+	}
+	// Cancelled sessions always get non-zero exit code, even if the process
+	// exited cleanly after SIGTERM — this ensures the inbox file is preserved
+	// for retry and the daemon marks the task as failed.
+	if cancelled && exitCode == 0 {
+		exitCode = -1
 	}
 
 	result := &Result{

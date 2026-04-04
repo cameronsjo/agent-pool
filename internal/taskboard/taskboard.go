@@ -57,6 +57,12 @@ func New() *Board {
 
 // Add registers a task. Returns an error if the ID already exists.
 func (b *Board) Add(task *Task) error {
+	if task == nil {
+		return fmt.Errorf("task is required")
+	}
+	if b.Tasks == nil {
+		b.Tasks = make(map[string]*Task)
+	}
 	if task.ID == "" {
 		return fmt.Errorf("task ID is required")
 	}
@@ -78,6 +84,9 @@ func (b *Board) Get(id string) (*Task, bool) {
 
 // Update applies a mutation function to the task with the given ID.
 func (b *Board) Update(id string, fn func(*Task)) error {
+	if fn == nil {
+		return fmt.Errorf("update function is required")
+	}
 	t, ok := b.Tasks[id]
 	if !ok {
 		return fmt.Errorf("task %q not found", id)

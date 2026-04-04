@@ -357,6 +357,10 @@ func (d *Daemon) registerTask(msg *mail.Message) {
 		return
 	}
 
+	// Recompute: dependencies may already be completed if prerequisites
+	// arrived and finished before this task was registered.
+	d.board.EvaluateDeps()
+
 	if err := d.board.Save(d.boardPath); err != nil {
 		d.logger.Error("Failed to save taskboard",
 			"error", err,
@@ -405,7 +409,14 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 
 	// Ensure task is registered in the taskboard. Pre-existing inbox files
 	// (from before the daemon started) may not be tracked yet.
-	d.ensureTaskRegistered(msg)
+	if err := d.ensureTaskRegistered(msg); err != nil {
+		d.logger.Error("Failed to register pre-existing task",
+			"expert", expertName,
+			"task_id", msg.ID,
+			"error", err,
+		)
+		return false
+	}
 
 	// Check taskboard status under lock — skip blocked or cancelled tasks.
 	d.mu.Lock()
@@ -559,7 +570,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		)
 	}
 
-	d.markTaskCompleted(msg.ID, result.ExitCode)
+	d.markTaskCompleted(ctx, msg.ID, result.ExitCode)
 
 	d.logger.Info("Successfully completed task",
 		"expert", expertName,
@@ -573,13 +584,14 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 }
 
 // ensureTaskRegistered adds a task to the taskboard if it isn't already tracked.
-// This handles pre-existing inbox files from before the daemon started.
-func (d *Daemon) ensureTaskRegistered(msg *mail.Message) {
+// This handles pre-existing inbox files from before the daemon started. Uses
+// the same ValidateAdd path as registerTask to enforce cycle/duplicate checks.
+func (d *Daemon) ensureTaskRegistered(msg *mail.Message) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	if _, ok := d.board.Get(msg.ID); ok {
-		return
+		return nil
 	}
 
 	status := taskboard.StatusPending
@@ -587,7 +599,7 @@ func (d *Daemon) ensureTaskRegistered(msg *mail.Message) {
 		status = taskboard.StatusBlocked
 	}
 
-	d.board.Add(&taskboard.Task{
+	task := &taskboard.Task{
 		ID:        msg.ID,
 		Status:    status,
 		Expert:    msg.To,
@@ -595,15 +607,25 @@ func (d *Daemon) ensureTaskRegistered(msg *mail.Message) {
 		From:      msg.From,
 		Type:      string(msg.Type),
 		Priority:  string(msg.Priority),
-	})
-	d.board.Save(d.boardPath)
+	}
+
+	if err := d.board.ValidateAdd(task); err != nil {
+		return fmt.Errorf("validating task %q: %w", msg.ID, err)
+	}
+	if err := d.board.Add(task); err != nil {
+		return fmt.Errorf("adding task %q: %w", msg.ID, err)
+	}
+	d.board.EvaluateDeps()
+	if err := d.board.Save(d.boardPath); err != nil {
+		return fmt.Errorf("saving taskboard: %w", err)
+	}
+	return nil
 }
 
 // markTaskCompleted updates a task's status to completed, evaluates dependencies,
-// and saves the taskboard.
-func (d *Daemon) markTaskCompleted(taskID string, exitCode int) {
+// wakes experts for newly-ready tasks, and saves the taskboard.
+func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode int) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	d.board.Update(taskID, func(t *taskboard.Task) {
 		now := time.Now().UTC()
@@ -613,14 +635,30 @@ func (d *Daemon) markTaskCompleted(taskID string, exitCode int) {
 	})
 
 	ready := d.board.EvaluateDeps()
+	d.board.Save(d.boardPath)
+
+	// Collect experts to wake before releasing the lock
+	var expertsToWake []string
 	if len(ready) > 0 {
 		d.logger.Info("Dependencies resolved, tasks now ready",
 			"completed_task", taskID,
 			"newly_ready", ready,
 		)
+		seen := make(map[string]bool)
+		for _, id := range ready {
+			if t, ok := d.board.Get(id); ok && !seen[t.Expert] {
+				seen[t.Expert] = true
+				expertsToWake = append(expertsToWake, t.Expert)
+			}
+		}
 	}
 
-	d.board.Save(d.boardPath)
+	d.mu.Unlock()
+
+	// Wake experts outside the lock — handleInbox acquires its own lock
+	for _, expert := range expertsToWake {
+		go d.handleInbox(ctx, expert, "")
+	}
 }
 
 // markTaskFailed updates a task's status to failed, propagates failure to

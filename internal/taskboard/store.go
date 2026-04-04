@@ -50,6 +50,11 @@ func (b *Board) Save(path string) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("writing temp file: %w", err)
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("syncing temp file: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpPath)
 		return fmt.Errorf("closing temp file: %w", err)

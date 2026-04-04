@@ -73,7 +73,7 @@ func (f *fakeSpawner) Spawn(ctx context.Context, _ *slog.Logger, cfg *expert.Spa
 				TaskID:   cfg.TaskMessage.ID,
 				ExitCode: -1,
 				Duration: 0,
-			}, ctx.Err()
+			}, nil
 		}
 	}
 
@@ -1148,22 +1148,20 @@ session_timeout = "1s"
 	// Wait for the 1s timeout to expire and the daemon to process the failure
 	time.Sleep(2 * time.Second)
 
-	// Spawn should have been cancelled by timeout — no successful calls recorded
-	calls := fake.getCalls()
-	if len(calls) != 0 {
-		t.Errorf("expected 0 successful spawn calls (timeout should cancel), got %d", len(calls))
-	}
-
-	// Inbox file should be preserved (spawn failed)
+	// Inbox file should be preserved (non-zero exit code from timeout)
 	inboxFile := filepath.Join(inboxDir, "task-timeout-001.md")
 	if _, err := os.Stat(inboxFile); os.IsNotExist(err) {
 		t.Error("inbox file should be preserved when spawn is cancelled by timeout")
 	}
 
-	// No log file should be written (spawn failed before logging)
-	logPath := filepath.Join(poolDir, "experts", "auth", "logs", "task-timeout-001.json")
-	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
-		t.Error("log file should not be written when spawn fails due to timeout")
+	// Taskboard should show the task as failed
+	board := loadTaskboard(t, poolDir)
+	task, ok := board.Tasks["task-timeout-001"]
+	if !ok {
+		t.Fatal("task-timeout-001 not found in taskboard")
+	}
+	if task.Status != "failed" {
+		t.Errorf("Status = %q, want %q", task.Status, "failed")
 	}
 
 	shutdownDaemon(t, cancel, errCh)
@@ -1392,18 +1390,14 @@ Task B depends on A (cycle).
 		t.Errorf("task-A Status = %q, want %q", taskA.Status, "blocked")
 	}
 
-	// task-B is rejected by registerTask (cycle detected), but the routed
-	// inbox file still exists. When the inbox is drained, ensureTaskRegistered
-	// adds it as blocked (no cycle check on that path). Both end up blocked.
-	taskB, okB := board.Tasks["task-B"]
-	if !okB {
-		t.Fatal("task-B not found in taskboard (added via ensureTaskRegistered)")
-	}
-	if taskB.Status != "blocked" {
-		t.Errorf("task-B Status = %q, want %q", taskB.Status, "blocked")
+	// task-B is rejected by both registerTask (cycle detected via ValidateAdd)
+	// and ensureTaskRegistered (same validation path). It should NOT be in
+	// the taskboard — cycle-creating tasks are fully rejected.
+	if _, okB := board.Tasks["task-B"]; okB {
+		t.Error("task-B should not be in taskboard (cycle rejected)")
 	}
 
-	// Verify: expert was never spawned for either task (both blocked)
+	// Verify: expert was never spawned for either task
 	calls := fake.getCalls()
 	for _, c := range calls {
 		if c.TaskMessage.ID == "task-A" || c.TaskMessage.ID == "task-B" {

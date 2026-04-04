@@ -62,7 +62,11 @@ type CurationSection struct {
 
 // ParseSessionTimeout parses the session timeout string to a time.Duration.
 func (d DefaultsSection) ParseSessionTimeout() (time.Duration, error) {
-	return time.ParseDuration(d.SessionTimeout)
+	dur, err := time.ParseDuration(d.SessionTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("parsing defaults.session_timeout %q: %w", d.SessionTimeout, err)
+	}
+	return dur, nil
 }
 
 // ExpertSection is the per-expert config.
