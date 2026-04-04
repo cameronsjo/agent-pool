@@ -105,11 +105,12 @@ type streamJSONMessage struct {
 	Result string `json:"result"`
 }
 
+const resultFallback = "(no result available)"
+
 // ExtractResult parses stream-json output for the final result text.
 // Returns the full result without truncation. Falls back to a placeholder
 // if no result message is found.
 func ExtractResult(output []byte) string {
-	const fallback = "(no result available)"
 
 	var lastResult string
 
@@ -130,12 +131,12 @@ func ExtractResult(output []byte) string {
 	}
 
 	if lastResult == "" {
-		return fallback
+		return resultFallback
 	}
 
 	lastResult = strings.Join(strings.Fields(lastResult), " ")
 	if lastResult == "" {
-		return fallback
+		return resultFallback
 	}
 
 	return lastResult
@@ -148,7 +149,7 @@ func ExtractSummary(output []byte) string {
 	const maxLen = 200
 
 	result := ExtractResult(output)
-	if result == "(no result available)" {
+	if result == resultFallback {
 		return "(no summary available)"
 	}
 

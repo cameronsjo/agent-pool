@@ -83,6 +83,6 @@ None found.
 
 1. **Run `write-tests`** for 2 high-risk gaps -- `pollForCompletion` timeout and cancellation paths. Biggest bang for the buck.
 2. **Add `TestListExperts_MissingConfig`** -- don't write pool.toml to temp dir, verify error. Easy win for medium-risk gap.
-3. **Refactor `TestAskExpert_MissingParams` into subtests** -- `t.Run("missing_expert", ...)` for isolation. Low effort P2 fix.
+3. **Refactor `TestAskExpert_MissingParams` into subtests** -- `t.Run("missing_expert", ...)` for isolation. Low-effort P2 fix.
 4. `make-testable` is NOT needed -- all functions are testable via the MCP server interface.
 5. `setup-coverage` is NOT needed -- Makefile already has `test-cover` and `test-gaps` targets.

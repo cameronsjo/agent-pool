@@ -13,7 +13,7 @@ for decomposition and execution.
 
 ### 1. Understand the request
 
-Clarify what the user wants built. Ask questions if the scope is ambiguous.
+Clarify what the user wants to build. Ask questions if the scope is ambiguous.
 Identify which domains are involved.
 
 ### 2. Gather expert input (optional)

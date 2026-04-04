@@ -110,6 +110,9 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 		}
 
 		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
+		if err := os.MkdirAll(postoffice, 0o755); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("creating postoffice dir: %v", err)), nil
+		}
 		path := filepath.Join(postoffice, id+".md")
 		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
 			cfg.Logger.Error("Failed to write question to postoffice",
@@ -126,7 +129,7 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 		)
 
 		// Poll taskboard until the expert completes
-		result, err := pollForCompletion(ctx, cfg, id, expertName)
+		result, err := pollForCompletion(ctx, cfg, id)
 		if err != nil {
 			cfg.Logger.Warn("Failed to get expert response",
 				"id", id,
@@ -146,8 +149,9 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 }
 
 // pollForCompletion blocks until a task reaches a terminal status, then reads
-// the expert's session log and extracts the result.
-func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertName string) (string, error) {
+// the expert's session log and extracts the result. Uses task.Expert from the
+// taskboard (not the original parameter) so it stays correct if routing changes.
+func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID string) (string, error) {
 	boardPath := filepath.Join(cfg.PoolDir, "taskboard.json")
 
 	deadlineCtx, cancel := context.WithTimeout(ctx, defaultPollTimeout)
@@ -161,7 +165,6 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 		case <-deadlineCtx.Done():
 			cfg.Logger.Warn("Timed out waiting for expert response",
 				"task_id", taskID,
-				"expert", expertName,
 				"timeout", defaultPollTimeout,
 			)
 			return "", fmt.Errorf("timed out after %v waiting for task %s", defaultPollTimeout, taskID)
@@ -169,8 +172,9 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 		case <-ticker.C:
 			board, err := taskboard.Load(boardPath)
 			if err != nil {
-				// Taskboard may not exist yet if daemon hasn't processed the message
-				continue
+				// Load returns an empty board for file-not-found; errors here
+				// indicate permission issues or corrupt JSON — stop polling.
+				return "", fmt.Errorf("loading taskboard: %w", err)
 			}
 
 			task, found := board.Get(taskID)
@@ -181,7 +185,7 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 
 			switch task.Status {
 			case taskboard.StatusCompleted:
-				return readExpertResult(cfg.PoolDir, expertName, taskID)
+				return readExpertResult(cfg.PoolDir, task.Expert, taskID)
 			case taskboard.StatusFailed:
 				exitInfo := ""
 				if task.ExitCode != nil {
@@ -189,14 +193,14 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID, expertNam
 				}
 				cfg.Logger.Warn("Expert task failed",
 					"task_id", taskID,
-					"expert", expertName,
+					"expert", task.Expert,
 					"exit_code", task.ExitCode,
 				)
-				return "", fmt.Errorf("expert %q failed task %s%s", expertName, taskID, exitInfo)
+				return "", fmt.Errorf("expert %q failed task %s%s", task.Expert, taskID, exitInfo)
 			case taskboard.StatusCancelled:
 				cfg.Logger.Warn("Expert task was cancelled",
 					"task_id", taskID,
-					"expert", expertName,
+					"expert", task.Expert,
 					"cancel_note", task.CancelNote,
 				)
 				return "", fmt.Errorf("task %s was cancelled: %s", taskID, task.CancelNote)
@@ -266,6 +270,9 @@ func handleSubmitPlan(cfg *ServerConfig) server.ToolHandlerFunc {
 		}
 
 		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
+		if err := os.MkdirAll(postoffice, 0o755); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("creating postoffice dir: %v", err)), nil
+		}
 		path := filepath.Join(postoffice, id+".md")
 		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
 			cfg.Logger.Error("Failed to write plan to postoffice",
@@ -328,18 +335,21 @@ func handleCheckStatus(cfg *ServerConfig) server.ToolHandlerFunc {
 			results = append(results, task)
 		}
 
-		// Sort by creation time for stable output
+		if len(results) == 0 {
+			return mcp.NewToolResultText("no matching tasks"), nil
+		}
+
+		// Sort by creation time with ID tiebreaker for stable output
 		sort.Slice(results, func(i, j int) bool {
+			if results[i].CreatedAt.Equal(results[j].CreatedAt) {
+				return results[i].ID < results[j].ID
+			}
 			return results[i].CreatedAt.Before(results[j].CreatedAt)
 		})
 
 		data, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("marshaling results: %v", err)), nil
-		}
-
-		if len(results) == 0 {
-			return mcp.NewToolResultText("no matching tasks"), nil
 		}
 
 		return mcp.NewToolResultText(string(data)), nil
