@@ -105,16 +105,15 @@ type streamJSONMessage struct {
 	Result string `json:"result"`
 }
 
-// ExtractSummary parses stream-json output for the final result text.
-// Returns the first 200 characters of the result. Falls back to a placeholder
+const resultFallback = "(no result available)"
+
+// ExtractResult parses stream-json output for the final result text.
+// Returns the full result without truncation. Falls back to a placeholder
 // if no result message is found.
-func ExtractSummary(output []byte) string {
-	const maxLen = 200
-	const fallback = "(no summary available)"
+func ExtractResult(output []byte) string {
 
 	var lastResult string
 
-	// stream-json is newline-delimited JSON
 	for _, line := range strings.Split(string(output), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -132,17 +131,31 @@ func ExtractSummary(output []byte) string {
 	}
 
 	if lastResult == "" {
-		return fallback
+		return resultFallback
 	}
 
-	// Collapse whitespace and truncate
 	lastResult = strings.Join(strings.Fields(lastResult), " ")
 	if lastResult == "" {
-		return fallback
-	}
-	if len(lastResult) > maxLen {
-		lastResult = lastResult[:maxLen] + "..."
+		return resultFallback
 	}
 
 	return lastResult
+}
+
+// ExtractSummary parses stream-json output for the final result text.
+// Returns the first 200 characters of the result. Falls back to a placeholder
+// if no result message is found.
+func ExtractSummary(output []byte) string {
+	const maxLen = 200
+
+	result := ExtractResult(output)
+	if result == resultFallback {
+		return "(no summary available)"
+	}
+
+	if len(result) > maxLen {
+		result = result[:maxLen] + "..."
+	}
+
+	return result
 }

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/daemon"
+	"github.com/cameronsjo/agent-pool/internal/daemon"
 )
 
 func TestWatcher_DetectsNewMDFile(t *testing.T) {

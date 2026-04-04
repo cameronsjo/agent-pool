@@ -42,10 +42,10 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"git.sjo.lol/cameron/agent-pool/internal/approval"
-	"git.sjo.lol/cameron/agent-pool/internal/contract"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+	"github.com/cameronsjo/agent-pool/internal/approval"
+	"github.com/cameronsjo/agent-pool/internal/contract"
+	"github.com/cameronsjo/agent-pool/internal/mail"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 )
 
 // setupArchitectPool creates a pool directory with architect-relevant dirs.

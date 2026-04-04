@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // SpawnConfig holds everything needed to spawn an expert session.

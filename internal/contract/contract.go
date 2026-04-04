@@ -13,7 +13,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"git.sjo.lol/cameron/agent-pool/internal/frontmatter"
+	"github.com/cameronsjo/agent-pool/internal/frontmatter"
 )
 
 // Contract represents a parsed contract file (YAML frontmatter + markdown body).

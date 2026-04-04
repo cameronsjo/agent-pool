@@ -41,8 +41,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // setupTestPool creates a minimal pool directory structure for testing.

@@ -1,0 +1,5 @@
+{
+  "name": "agent-pool",
+  "description": "Expert pool \u2014 delegate questions and tasks to domain specialists via a mixture-of-experts model",
+  "version": "0.5.0"
+}

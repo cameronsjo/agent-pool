@@ -1,4 +1,4 @@
-module git.sjo.lol/cameron/agent-pool
+module github.com/cameronsjo/agent-pool
 
 go 1.26.1
 

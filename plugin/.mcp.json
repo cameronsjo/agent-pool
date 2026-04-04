@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-pool": {
+      "command": "agent-pool",
+      "args": ["mcp", "--pool", "${AGENT_POOL_DIR}", "--role", "concierge"],
+      "type": "stdio"
+    }
+  }
+}

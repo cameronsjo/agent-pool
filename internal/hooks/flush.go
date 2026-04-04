@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // FlushConfig holds the parameters for the flush hook.

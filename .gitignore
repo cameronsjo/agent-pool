@@ -33,3 +33,4 @@ Thumbs.db
 # Test
 coverage.out
 coverage.html
+.review-loop.local.md
