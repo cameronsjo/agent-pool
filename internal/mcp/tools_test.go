@@ -30,154 +30,32 @@
 package mcp_test
 
 import (
-	"context"
 	"encoding/json"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/mark3labs/mcp-go/server"
-
-	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
-// setupTestPool creates a minimal pool directory structure for testing.
-func setupTestPool(t *testing.T, expertName string) (poolDir string, expertDir string) {
+// setupExpertPool creates a pool directory for an expert with postoffice + expert dir + logs.
+func setupExpertPool(t *testing.T, expertName string) (poolDir string, expertDir string) {
 	t.Helper()
-	poolDir = t.TempDir()
+	poolDir = makePoolDirs(t, "postoffice", filepath.Join("experts", expertName), filepath.Join("experts", expertName, "logs"))
 	expertDir = filepath.Join(poolDir, "experts", expertName)
-	if err := os.MkdirAll(expertDir, 0o755); err != nil {
-		t.Fatalf("creating expert dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(expertDir, "logs"), 0o755); err != nil {
-		t.Fatalf("creating logs dir: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Join(poolDir, "postoffice"), 0o755); err != nil {
-		t.Fatalf("creating postoffice dir: %v", err)
-	}
 	return poolDir, expertDir
-}
-
-// buildTestServer creates an MCP server with expert tools registered for testing.
-// It also sends the initialization handshake so the server accepts tool calls.
-func buildTestServer(t *testing.T, poolDir, expertName string) *server.MCPServer {
-	t.Helper()
-	cfg := &agentmcp.ServerConfig{
-		PoolDir:    poolDir,
-		ExpertName: expertName,
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
-	}
-	srv := server.NewMCPServer("agent-pool-test", "0.0.0-test")
-	agentmcp.RegisterExpertTools(srv, cfg)
-
-	// Initialize the server (MCP handshake)
-	initMsg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]any{},
-			"clientInfo": map[string]any{
-				"name":    "test-client",
-				"version": "0.0.1",
-			},
-		},
-	})
-	srv.HandleMessage(context.Background(), initMsg)
-
-	return srv
-}
-
-// callTool invokes a tool by name with the given arguments via JSON-RPC.
-func callTool(t *testing.T, srv *server.MCPServer, name string, args map[string]any) *mcp.CallToolResult {
-	t.Helper()
-
-	msg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      2,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      name,
-			"arguments": args,
-		},
-	})
-
-	resp := srv.HandleMessage(context.Background(), msg)
-
-	// Parse the response to extract the result
-	respBytes, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshaling response: %v", err)
-	}
-
-	var rpcResp struct {
-		Result *mcp.CallToolResult `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
-		t.Fatalf("unmarshaling response: %v\nraw: %s", err, string(respBytes))
-	}
-
-	if rpcResp.Error != nil {
-		t.Fatalf("JSON-RPC error: %d %s", rpcResp.Error.Code, rpcResp.Error.Message)
-	}
-
-	if rpcResp.Result == nil {
-		t.Fatalf("nil result in response: %s", string(respBytes))
-	}
-
-	return rpcResp.Result
-}
-
-// resultText extracts the text content from a tool result.
-func resultText(t *testing.T, result *mcp.CallToolResult) string {
-	t.Helper()
-	if len(result.Content) == 0 {
-		t.Fatal("result has no content")
-	}
-
-	// Content items are interfaces; marshal and re-parse to get the text
-	for _, c := range result.Content {
-		data, _ := json.Marshal(c)
-		var tc struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		}
-		if err := json.Unmarshal(data, &tc); err == nil && tc.Type == "text" {
-			return tc.Text
-		}
-	}
-
-	t.Fatal("no text content found in result")
-	return ""
-}
-
-func mustJSON(t *testing.T, v any) json.RawMessage {
-	t.Helper()
-	data, err := json.Marshal(v)
-	if err != nil {
-		t.Fatalf("marshaling JSON: %v", err)
-	}
-	return data
 }
 
 // --- pool_read_state ---
 
 func TestReadState_AllPresent(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
 	os.WriteFile(filepath.Join(expertDir, "identity.md"), []byte("Auth expert"), 0o644)
 	os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("Working on OAuth"), 0o644)
 	os.WriteFile(filepath.Join(expertDir, "errors.md"), []byte("JWT panics"), 0o644)
 
-	srv := buildTestServer(t, poolDir, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 	result := callTool(t, srv, "pool_read_state", nil)
 
 	text := resultText(t, result)
@@ -198,8 +76,8 @@ func TestReadState_AllPresent(t *testing.T) {
 }
 
 func TestReadState_NoFiles(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 	result := callTool(t, srv, "pool_read_state", nil)
 
 	text := resultText(t, result)
@@ -216,8 +94,8 @@ func TestReadState_NoFiles(t *testing.T) {
 // --- pool_update_state ---
 
 func TestUpdateState_HappyPath(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_update_state", map[string]any{
 		"content": "Updated working memory",
@@ -234,8 +112,8 @@ func TestUpdateState_HappyPath(t *testing.T) {
 }
 
 func TestUpdateState_EmptyContent(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_update_state", map[string]any{
 		"content": "",
@@ -249,8 +127,8 @@ func TestUpdateState_EmptyContent(t *testing.T) {
 // --- pool_append_error ---
 
 func TestAppendError_HappyPath(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_append_error", map[string]any{
 		"entry": "Connection timeout to database",
@@ -267,8 +145,8 @@ func TestAppendError_HappyPath(t *testing.T) {
 }
 
 func TestAppendError_EmptyEntry(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_append_error", map[string]any{
 		"entry": "",
@@ -282,8 +160,8 @@ func TestAppendError_EmptyEntry(t *testing.T) {
 // --- pool_send_response ---
 
 func TestSendResponse_HappyPath(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_send_response", map[string]any{
 		"to":   "architect",
@@ -317,8 +195,8 @@ func TestSendResponse_HappyPath(t *testing.T) {
 }
 
 func TestSendResponse_MissingTo(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_send_response", map[string]any{
 		"body": "response body",
@@ -331,8 +209,8 @@ func TestSendResponse_MissingTo(t *testing.T) {
 }
 
 func TestSendResponse_PathTraversalID(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_send_response", map[string]any{
 		"to":   "architect",
@@ -348,14 +226,14 @@ func TestSendResponse_PathTraversalID(t *testing.T) {
 // --- pool_recall ---
 
 func TestRecall_HappyPath(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
 	os.WriteFile(
 		filepath.Join(expertDir, "logs", "task-042.json"),
 		[]byte(`{"type":"result","result":"Built token endpoint"}`),
 		0o644,
 	)
 
-	srv := buildTestServer(t, poolDir, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 	result := callTool(t, srv, "pool_recall", map[string]any{
 		"task_id": "task-042",
 	})
@@ -371,8 +249,8 @@ func TestRecall_HappyPath(t *testing.T) {
 }
 
 func TestRecall_MissingLog(t *testing.T) {
-	poolDir, _ := setupTestPool(t, "auth")
-	srv := buildTestServer(t, poolDir, "auth")
+	poolDir, _ := setupExpertPool(t, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
 	result := callTool(t, srv, "pool_recall", map[string]any{
 		"task_id": "nonexistent",
@@ -386,7 +264,7 @@ func TestRecall_MissingLog(t *testing.T) {
 // --- pool_search_index ---
 
 func TestSearchIndex_HappyPath(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
 
 	index := "| Task ID | Timestamp | From | Exit | Summary |\n" +
 		"|---------|-----------|------|-----:|---------|\n" +
@@ -394,7 +272,7 @@ func TestSearchIndex_HappyPath(t *testing.T) {
 		"| task-002 | 2026-04-02T12:00:00Z | architect | 0 | Fixed OAuth bug |\n"
 	os.WriteFile(filepath.Join(expertDir, "logs", "index.md"), []byte(index), 0o644)
 
-	srv := buildTestServer(t, poolDir, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 	result := callTool(t, srv, "pool_search_index", map[string]any{
 		"query": "OAuth",
 	})
@@ -410,14 +288,14 @@ func TestSearchIndex_HappyPath(t *testing.T) {
 }
 
 func TestSearchIndex_NoMatches(t *testing.T) {
-	poolDir, expertDir := setupTestPool(t, "auth")
+	poolDir, expertDir := setupExpertPool(t, "auth")
 
 	index := "| Task ID | Timestamp | From | Exit | Summary |\n" +
 		"|---------|-----------|------|-----:|---------|\n" +
 		"| task-001 | 2026-04-01T12:00:00Z | architect | 0 | Built auth endpoint |\n"
 	os.WriteFile(filepath.Join(expertDir, "logs", "index.md"), []byte(index), 0o644)
 
-	srv := buildTestServer(t, poolDir, "auth")
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
 	result := callTool(t, srv, "pool_search_index", map[string]any{
 		"query": "nonexistent",
 	})
