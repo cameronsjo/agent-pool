@@ -60,7 +60,7 @@ See [docs/plans/architecture.md](docs/plans/architecture.md) for the full design
 
 Agent Pool draws inspiration from two prominent multi-agent frameworks — [Gas Town](https://github.com/steveyegge/gastown) and [OpenClaw](https://github.com/openclaw/openclaw) — while making different architectural bets.
 
-### Gas Town
+### Gas Town *(as of 2026-04-04)*
 
 Steve Yegge's multi-agent workspace manager orchestrates 20-30 parallel coding agents through tmux sessions, git worktrees, and the Beads issue tracker. Agents coordinate via a Mad Max-themed role hierarchy (Mayor, Pole Cats, Refinery, Deacon, Witness) with a watchdog chain for health monitoring. It supports Claude, Gemini, Codex, Cursor, and others.
 
@@ -77,7 +77,7 @@ Steve Yegge's multi-agent workspace manager orchestrates 20-30 parallel coding a
 **What we took:** GUPP, handoff mechanics, log recall, formulas, named roles.
 **What we left:** The scale ambition, Dolt data plane, multi-provider support, Mad Max branding.
 
-### OpenClaw
+### OpenClaw *(as of 2026-04-04)*
 
 Peter Steinberger's personal AI assistant framework provides a persistent Gateway daemon as the control plane for multi-channel messaging (WhatsApp, Telegram, Slack, Discord, and 15+ more). Agents are defined through a workspace-as-brain model with SOUL.md identity files and a skills ecosystem. It supports Claude, GPT-4o, Gemini, and DeepSeek.
 
