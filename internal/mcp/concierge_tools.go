@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -99,28 +98,13 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 			Body:      question,
 		}
 
-		composed, err := mail.Compose(msg)
-		if err != nil {
-			cfg.Logger.Error("Failed to compose question",
+		if err := postMessage(cfg.PoolDir, msg); err != nil {
+			cfg.Logger.Error("Failed to post question",
 				"id", id,
 				"expert", expertName,
 				"error", err,
 			)
-			return mcp.NewToolResultError(fmt.Sprintf("composing question: %v", err)), nil
-		}
-
-		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
-		if err := os.MkdirAll(postoffice, 0o755); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("creating postoffice dir: %v", err)), nil
-		}
-		path := filepath.Join(postoffice, id+".md")
-		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
-			cfg.Logger.Error("Failed to write question to postoffice",
-				"id", id,
-				"expert", expertName,
-				"error", err,
-			)
-			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		cfg.Logger.Info("Successfully dispatched question, polling for response",
@@ -260,26 +244,12 @@ func handleSubmitPlan(cfg *ServerConfig) server.ToolHandlerFunc {
 			Body:      plan,
 		}
 
-		composed, err := mail.Compose(msg)
-		if err != nil {
-			cfg.Logger.Error("Failed to compose plan",
+		if err := postMessage(cfg.PoolDir, msg); err != nil {
+			cfg.Logger.Error("Failed to post plan",
 				"id", id,
 				"error", err,
 			)
-			return mcp.NewToolResultError(fmt.Sprintf("composing plan: %v", err)), nil
-		}
-
-		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
-		if err := os.MkdirAll(postoffice, 0o755); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("creating postoffice dir: %v", err)), nil
-		}
-		path := filepath.Join(postoffice, id+".md")
-		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
-			cfg.Logger.Error("Failed to write plan to postoffice",
-				"id", id,
-				"error", err,
-			)
-			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		cfg.Logger.Info("Successfully submitted plan to architect",

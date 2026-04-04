@@ -1,0 +1,30 @@
+package mcp
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/cameronsjo/agent-pool/internal/mail"
+)
+
+// postMessage composes a mail message and writes it to the pool's postoffice.
+// Creates the postoffice directory if it doesn't exist.
+func postMessage(poolDir string, msg *mail.Message) error {
+	composed, err := mail.Compose(msg)
+	if err != nil {
+		return fmt.Errorf("composing message: %w", err)
+	}
+
+	postoffice := filepath.Join(poolDir, "postoffice")
+	if err := os.MkdirAll(postoffice, 0o755); err != nil {
+		return fmt.Errorf("creating postoffice dir: %w", err)
+	}
+
+	path := filepath.Join(postoffice, msg.ID+".md")
+	if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
+		return fmt.Errorf("writing to postoffice: %w", err)
+	}
+
+	return nil
+}
