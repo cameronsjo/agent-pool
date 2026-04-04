@@ -15,6 +15,12 @@ var builtinRoles = map[string]bool{
 	"concierge":  true,
 }
 
+// IsBuiltinRole reports whether the given name is a built-in role (architect,
+// researcher, concierge) rather than a pool-scoped expert.
+func IsBuiltinRole(name string) bool {
+	return builtinRoles[name]
+}
+
 // ResolveInbox returns the inbox directory path for a recipient within a pool.
 //
 // Built-in roles (architect, researcher, concierge):

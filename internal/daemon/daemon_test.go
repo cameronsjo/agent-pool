@@ -26,6 +26,11 @@
 // Handoff:
 //   - HandoffIncrementsCount: handoff_count=1, needs_attention=false
 //   - HandoffEscalation: handoff_count=2, needs_attention=true
+//
+// Architect:
+//   - ArchitectSpawn: message to architect routes and spawns with opus model
+//   - ArchitectConfigResolution: architect uses opus, auth uses haiku
+//   - ArchitectInboxDrainOnStart: pre-existing inbox message processed on startup
 package daemon_test
 
 import (
@@ -1647,6 +1652,215 @@ project_dir = "` + poolDir + `"
 	}
 	if spawnCount != 1 {
 		t.Errorf("expected 1 spawn for task-dup-001, got %d", spawnCount)
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+// --- Architect spawning tests ---
+
+func TestDaemon_ArchitectSpawn(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[architect]
+model = "opus"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Route a message to architect via postoffice
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-arch-001", "concierge", "architect")
+
+	// Wait for spawn
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected architect spawn, got none")
+	}
+
+	call := calls[0]
+	if call.Name != "architect" {
+		t.Errorf("spawn name = %q, want architect", call.Name)
+	}
+	if call.Model != "opus" {
+		t.Errorf("spawn model = %q, want opus", call.Model)
+	}
+	if call.TaskMessage.ID != "task-arch-001" {
+		t.Errorf("task ID = %q, want task-arch-001", call.TaskMessage.ID)
+	}
+
+	// Verify log file written to architect dir (not experts/architect)
+	logPath := filepath.Join(poolDir, "architect", "logs", "task-arch-001.json")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(logPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Error("log should be written to architect/logs/, not experts/architect/logs/")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ArchitectConfigResolution(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[architect]
+model = "opus"
+session_timeout = "30m"
+
+[experts.auth]
+model = "haiku"
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Route to architect
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-cfg-arch", "concierge", "architect")
+	// Route to auth
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-cfg-auth", "architect", "auth")
+
+	// Wait for both spawns
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) >= 2 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) < 2 {
+		t.Fatalf("expected 2 spawns, got %d", len(calls))
+	}
+
+	// Find each call
+	for _, c := range calls {
+		switch c.Name {
+		case "architect":
+			if c.Model != "opus" {
+				t.Errorf("architect model = %q, want opus", c.Model)
+			}
+		case "auth":
+			if c.Model != "haiku" {
+				t.Errorf("auth model = %q, want haiku", c.Model)
+			}
+		}
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ArchitectInboxDrainOnStart(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[architect]
+model = "opus"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	// Pre-create inbox and put a message there before daemon starts
+	architectInbox := filepath.Join(poolDir, "architect", "inbox")
+	os.MkdirAll(architectInbox, 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "architect", "logs"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "postoffice"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "experts", "auth", "inbox"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "experts", "auth", "logs"), 0o755)
+
+	writeMessage(t, architectInbox, "task-predrain-001", "concierge", "architect")
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	// Wait for drain to process pre-existing message
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected pre-existing architect inbox message to be processed on startup")
+	}
+	if calls[0].Name != "architect" {
+		t.Errorf("spawn name = %q, want architect", calls[0].Name)
 	}
 
 	shutdownDaemon(t, cancel, errCh)

@@ -102,6 +102,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("watching postoffice: %w", err)
 	}
 
+	// Watch architect inbox
+	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
+	if err := watcher.Add(architectInbox); err != nil {
+		return fmt.Errorf("watching architect inbox: %w", err)
+	}
+
 	// Watch each expert's inbox
 	for name := range d.cfg.Experts {
 		inboxDir := mail.ResolveInbox(d.poolDir, name)
@@ -464,9 +470,15 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 
 	model, tools := d.resolveExpertConfig(expertName)
 	projectDir := d.resolveProjectDir()
-	expertDir := filepath.Join(d.poolDir, "experts", expertName)
+	expertDir := d.resolveExpertDir(expertName)
 
-	mcpConfigPath, mcpErr := agentmcp.WriteTempConfig(d.poolDir, expertName)
+	var mcpConfigPath string
+	var mcpErr error
+	if mail.IsBuiltinRole(expertName) {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigForRole(d.poolDir, expertName)
+	} else {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfig(d.poolDir, expertName)
+	}
 	if mcpErr != nil {
 		d.logger.Error("Failed to write MCP config",
 			"expert", expertName,
@@ -496,7 +508,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		MCPConfigPath: mcpConfigPath,
 	}
 
-	timeout, parseErr := d.cfg.Defaults.ParseSessionTimeout()
+	timeout, parseErr := d.resolveSessionTimeout(expertName)
 	if parseErr != nil {
 		d.logger.Warn("Failed to parse session timeout, using default 10m",
 			"error", parseErr,
@@ -678,9 +690,12 @@ func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
 	d.board.Save(d.boardPath)
 }
 
-// drainAllInboxes processes any files sitting in expert inboxes when the daemon starts.
-// Each expert drains in its own goroutine via handleInbox so they run concurrently.
+// drainAllInboxes processes any files sitting in expert and architect inboxes
+// when the daemon starts. Each drains in its own goroutine via handleInbox.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
+	// Drain architect inbox
+	go d.handleInbox(ctx, "architect", "")
+
 	for name := range d.cfg.Experts {
 		go d.handleInbox(ctx, name, "")
 	}
@@ -768,10 +783,18 @@ func (d *Daemon) drainPostoffice(ctx context.Context) {
 }
 
 // resolveExpertConfig returns the model and allowed tools for an expert,
-// falling back to pool defaults for empty values.
+// falling back to pool defaults for empty values. Built-in roles (architect)
+// use their own config section.
 func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string) {
 	model = d.cfg.Defaults.Model
 	tools = d.cfg.Defaults.AllowedTools
+
+	if name == "architect" {
+		if d.cfg.Architect.Model != "" {
+			model = d.cfg.Architect.Model
+		}
+		return model, tools
+	}
 
 	if ec, ok := d.cfg.Experts[name]; ok {
 		if ec.Model != "" {
@@ -783,6 +806,28 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 	}
 
 	return model, tools
+}
+
+// resolveSessionTimeout returns the session timeout for the given role or expert.
+// Built-in roles with their own timeout config use that; otherwise falls back to defaults.
+func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
+	if name == "architect" && d.cfg.Architect.SessionTimeout != "" {
+		dur, err := time.ParseDuration(d.cfg.Architect.SessionTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("parsing architect.session_timeout %q: %w", d.cfg.Architect.SessionTimeout, err)
+		}
+		return dur, nil
+	}
+	return d.cfg.Defaults.ParseSessionTimeout()
+}
+
+// resolveExpertDir returns the state directory for an expert or built-in role.
+// Built-in roles use {poolDir}/{role}/, experts use {poolDir}/experts/{name}/.
+func (d *Daemon) resolveExpertDir(name string) string {
+	if mail.IsBuiltinRole(name) {
+		return filepath.Join(d.poolDir, name)
+	}
+	return filepath.Join(d.poolDir, "experts", name)
 }
 
 // resolveProjectDir expands ~ in the pool's project directory setting.
@@ -797,7 +842,14 @@ func (d *Daemon) resolveProjectDir() string {
 }
 
 // resolveExpertName extracts the expert name from an inbox directory path.
+// Checks built-in roles (architect) first, then pool-scoped experts.
 func (d *Daemon) resolveExpertName(inboxDir string) string {
+	// Check architect first — it's the only built-in role we spawn in v0.4
+	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
+	if absEqual(inboxDir, architectInbox) {
+		return "architect"
+	}
+
 	for name := range d.cfg.Experts {
 		expected := mail.ResolveInbox(d.poolDir, name)
 		if absEqual(inboxDir, expected) {
@@ -811,8 +863,12 @@ func (d *Daemon) resolveExpertName(inboxDir string) string {
 func (d *Daemon) ensureDirs() error {
 	dirs := []string{
 		filepath.Join(d.poolDir, "postoffice"),
-		// Built-in roles get top-level inbox directories
+		filepath.Join(d.poolDir, "contracts"),
+		filepath.Join(d.poolDir, "approvals"),
+		// Built-in roles get top-level inbox + logs directories
 		filepath.Join(d.poolDir, "architect", "inbox"),
+		filepath.Join(d.poolDir, "architect", "logs"),
+		filepath.Join(d.poolDir, "architect", "verifications"),
 		filepath.Join(d.poolDir, "researcher", "inbox"),
 		filepath.Join(d.poolDir, "concierge", "inbox"),
 	}
