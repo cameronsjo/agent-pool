@@ -11,6 +11,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"git.sjo.lol/cameron/agent-pool/internal/approval"
 	"git.sjo.lol/cameron/agent-pool/internal/contract"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
 )
@@ -162,6 +163,16 @@ func handleSendTask(cfg *ServerConfig) server.ToolHandlerFunc {
 			return mcp.NewToolResultError(fmt.Sprintf("composing message: %v", err)), nil
 		}
 
+		// Approval gate: block on human approval if required
+		if shouldRequireApproval(cfg.ApprovalMode) {
+			gate := approval.DefaultGate(cfg.PoolDir)
+			proposalSummary := fmt.Sprintf("Task: %s\nTo: %s\nPriority: %s\nContracts: %s\n\n%s",
+				id, to, priority, strings.Join(contracts, ", "), body)
+			if gateErr := gate.Request(ctx, id, proposalSummary); gateErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("approval gate: %v", gateErr)), nil
+			}
+		}
+
 		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
 		path := filepath.Join(postoffice, id+".md")
 
@@ -270,6 +281,19 @@ func handleAmendContract(cfg *ServerConfig, store *contract.Store) server.ToolHa
 
 		return mcp.NewToolResultText(fmt.Sprintf("contract %s amended to v%d, notified: %s",
 			id, amended.Version, strings.Join(amended.Between, ", "))), nil
+	}
+}
+
+// shouldRequireApproval returns whether the given approval mode requires
+// human approval before task dispatch.
+func shouldRequireApproval(mode string) bool {
+	switch mode {
+	case "none", "":
+		return false
+	case "decomposition", "all":
+		return true
+	default:
+		return true // safe default
 	}
 }
 

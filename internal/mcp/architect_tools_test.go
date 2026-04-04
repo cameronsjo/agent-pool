@@ -21,6 +21,10 @@
 // pool_amend_contract (Classification: FILESYSTEM I/O)
 //   [x] Happy: version incremented + notify messages (TestAmendContract_Happy)
 //   [x] Error: contract not found (TestAmendContract_NotFound)
+//
+// Approval gate integration (Classification: FILESYSTEM I/O + CONCURRENCY)
+//   [x] Happy: none mode bypasses approval (TestSendTask_ApprovalNoneMode)
+//   [x] Happy: decomposition mode blocks until approved (TestSendTask_ApprovalRequired)
 
 package mcp_test
 
@@ -32,10 +36,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"git.sjo.lol/cameron/agent-pool/internal/approval"
 	"git.sjo.lol/cameron/agent-pool/internal/contract"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
 	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
@@ -399,5 +405,110 @@ func TestAmendContract_NotFound(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Error("expected error for nonexistent contract")
+	}
+}
+
+// --- Approval gate tests ---
+
+func TestSendTask_ApprovalNoneMode(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	if err := os.MkdirAll(filepath.Join(poolDir, "approvals"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// approval_mode = "none" (set in setupArchitectPool via buildArchitectTestServer)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "pool_send_task", map[string]any{
+		"to":   "auth",
+		"body": "do something",
+		"id":   "task-none-001",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "task-none-001") {
+		t.Errorf("expected task sent, got %q", text)
+	}
+
+	// Verify message went directly to postoffice (no approval files)
+	if _, err := os.Stat(filepath.Join(poolDir, "postoffice", "task-none-001.md")); err != nil {
+		t.Error("task should be in postoffice with approval_mode=none")
+	}
+}
+
+func TestSendTask_ApprovalRequired(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	if err := os.MkdirAll(filepath.Join(poolDir, "approvals"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Build server with decomposition mode
+	cfg := &agentmcp.ServerConfig{
+		PoolDir:      poolDir,
+		ExpertName:   "architect",
+		Role:         "architect",
+		ApprovalMode: "decomposition",
+		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	}
+	srv := server.NewMCPServer("agent-pool-test", "0.4.0-test")
+	agentmcp.RegisterExpertTools(srv, cfg)
+	agentmcp.RegisterArchitectTools(srv, cfg)
+
+	initMsg := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]any{},
+			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
+		},
+	})
+	srv.HandleMessage(context.Background(), initMsg)
+
+	// Call pool_send_task in a goroutine (it blocks on approval)
+	resultCh := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		r := callTool(t, srv, "pool_send_task", map[string]any{
+			"to":   "auth",
+			"body": "implement token endpoint",
+			"id":   "task-approval-001",
+		})
+		resultCh <- r
+	}()
+
+	// Wait for proposal file to appear
+	proposalPath := filepath.Join(poolDir, "approvals", "task-approval-001.proposal.md")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(proposalPath); err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(proposalPath); os.IsNotExist(err) {
+		t.Fatal("expected proposal file to be written")
+	}
+
+	// Approve the proposal
+	if err := approval.Respond(filepath.Join(poolDir, "approvals"), "task-approval-001", true, ""); err != nil {
+		t.Fatalf("Respond: %v", err)
+	}
+
+	// Wait for result
+	select {
+	case result := <-resultCh:
+		text := resultText(t, result)
+		if !strings.Contains(text, "task-approval-001") {
+			t.Errorf("expected task sent, got %q", text)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for send_task to complete after approval")
+	}
+
+	// Verify task reached postoffice
+	if _, err := os.Stat(filepath.Join(poolDir, "postoffice", "task-approval-001.md")); err != nil {
+		t.Error("task should be in postoffice after approval")
 	}
 }

@@ -16,6 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"io"
+
+	"git.sjo.lol/cameron/agent-pool/internal/approval"
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 	"git.sjo.lol/cameron/agent-pool/internal/expert"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
@@ -41,6 +44,8 @@ type Daemon struct {
 	poolDir string
 	logger  *slog.Logger
 	spawner Spawner
+	stdin   io.Reader // for approval stdin (defaults to os.Stdin)
+	stdout  io.Writer // for approval stdout (defaults to os.Stdout)
 
 	mu        sync.Mutex
 	board     *taskboard.Board
@@ -54,6 +59,16 @@ type Option func(*Daemon)
 // WithSpawner sets a custom spawner (used in tests).
 func WithSpawner(s Spawner) Option {
 	return func(d *Daemon) { d.spawner = s }
+}
+
+// WithStdin sets a custom stdin reader for approval input (used in tests).
+func WithStdin(r io.Reader) Option {
+	return func(d *Daemon) { d.stdin = r }
+}
+
+// WithStdout sets a custom stdout writer for approval output (used in tests).
+func WithStdout(w io.Writer) Option {
+	return func(d *Daemon) { d.stdout = w }
 }
 
 // New creates a Daemon for the given pool.
@@ -108,6 +123,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("watching architect inbox: %w", err)
 	}
 
+	// Watch approvals directory for human approval requests
+	approvalsDir := filepath.Join(d.poolDir, "approvals")
+	if err := watcher.Add(approvalsDir); err != nil {
+		return fmt.Errorf("watching approvals: %w", err)
+	}
+
 	// Watch each expert's inbox
 	for name := range d.cfg.Experts {
 		inboxDir := mail.ResolveInbox(d.poolDir, name)
@@ -145,6 +166,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 			if event.Dir == postofficeDir {
 				d.handlePostoffice(ctx, event.Path)
+			} else if event.Dir == approvalsDir {
+				go d.handleApprovalRequest(ctx, event.Path)
 			} else {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
@@ -812,6 +835,92 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 	}
 
 	return model, tools
+}
+
+// handleApprovalRequest processes a .pending file in the approvals directory.
+// It reads the proposal, presents it to the human via the configured presenter,
+// and writes the response. Runs in a goroutine so it doesn't block the event loop.
+func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
+	filename := filepath.Base(path)
+	proposalID := approval.PendingProposalID(filename)
+	if proposalID == "" {
+		return // not a .pending file
+	}
+
+	if d.cfg.Architect.ApprovalMode == "none" {
+		// Auto-approve in none mode
+		approvalsDir := filepath.Join(d.poolDir, "approvals")
+		if err := approval.Respond(approvalsDir, proposalID, true, ""); err != nil {
+			d.logger.Error("Failed to auto-approve proposal",
+				"proposal_id", proposalID,
+				"error", err,
+			)
+		}
+		return
+	}
+
+	approvalsDir := filepath.Join(d.poolDir, "approvals")
+	proposal, err := approval.ReadProposal(approvalsDir, proposalID)
+	if err != nil {
+		d.logger.Error("Failed to read approval proposal",
+			"proposal_id", proposalID,
+			"error", err,
+		)
+		return
+	}
+
+	stdin := d.stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	stdout := d.stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	presenter, err := approval.ParseHumanInbox(d.cfg.Architect.HumanInbox, stdin, stdout)
+	if err != nil {
+		d.logger.Error("Failed to parse human_inbox config",
+			"value", d.cfg.Architect.HumanInbox,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("Presenting approval request to human",
+		"proposal_id", proposalID,
+		"mode", d.cfg.Architect.HumanInbox,
+	)
+
+	approved, err := presenter.Present(ctx, proposalID, proposal)
+	if err != nil {
+		d.logger.Error("Failed to present approval request",
+			"proposal_id", proposalID,
+			"error", err,
+		)
+		// Write rejection on presenter error so the tool handler unblocks
+		approval.Respond(approvalsDir, proposalID, false, fmt.Sprintf("presenter error: %v", err))
+		return
+	}
+
+	reason := ""
+	if !approved {
+		reason = "human rejected"
+	}
+
+	if err := approval.Respond(approvalsDir, proposalID, approved, reason); err != nil {
+		d.logger.Error("Failed to write approval response",
+			"proposal_id", proposalID,
+			"approved", approved,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("Successfully processed approval request",
+		"proposal_id", proposalID,
+		"approved", approved,
+	)
 }
 
 // resolveSessionTimeout returns the session timeout for the given role or expert.
