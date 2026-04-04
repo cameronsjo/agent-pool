@@ -17,6 +17,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -139,11 +140,17 @@ func Respond(approvalsDir, proposalID string, approved bool, reason string) erro
 
 	if approved {
 		path := filepath.Join(approvalsDir, proposalID+".approved")
-		return os.WriteFile(path, nil, 0o644)
+		if err := os.WriteFile(path, nil, 0o644); err != nil {
+			return fmt.Errorf("writing approval: %w", err)
+		}
+		return nil
 	}
 
 	path := filepath.Join(approvalsDir, proposalID+".rejected")
-	return os.WriteFile(path, []byte(reason), 0o644)
+	if err := os.WriteFile(path, []byte(reason), 0o644); err != nil {
+		return fmt.Errorf("writing rejection: %w", err)
+	}
+	return nil
 }
 
 // ReadProposal reads the content of a pending proposal.
@@ -160,11 +167,8 @@ func ReadProposal(approvalsDir, proposalID string) (string, error) {
 // Returns empty string if the file doesn't match the pattern.
 func ProposalID(filename string) string {
 	const suffix = ".proposal.md"
-	if len(filename) <= len(suffix) {
+	if !strings.HasSuffix(filename, suffix) || len(filename) <= len(suffix) {
 		return ""
 	}
-	if filename[len(filename)-len(suffix):] != suffix {
-		return ""
-	}
-	return filename[:len(filename)-len(suffix)]
+	return strings.TrimSuffix(filename, suffix)
 }

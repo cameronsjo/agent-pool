@@ -224,7 +224,7 @@ func TestStore_UpdateIndex(t *testing.T) {
 	}
 }
 
-func TestStore_SaveDuplicateVersion(t *testing.T) {
+func TestStore_SaveDuplicateRejects(t *testing.T) {
 	poolDir := t.TempDir()
 	store := NewStore(poolDir)
 
@@ -232,12 +232,11 @@ func TestStore_SaveDuplicateVersion(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 
-	// Try to save same ID with different version
+	// Any attempt to Save an existing contract ID is rejected
 	dup := *validContract
-	dup.Version = 5
 	err := store.Save(&dup)
 	if err == nil {
-		t.Fatal("expected error saving duplicate with different version")
+		t.Fatal("expected error saving duplicate contract")
 	}
 }
 

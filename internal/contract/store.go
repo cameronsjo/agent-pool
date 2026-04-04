@@ -49,10 +49,7 @@ func (s *Store) Save(c *Contract) error {
 
 	// Check for existing contract — Save is for new contracts only
 	if _, err := os.Stat(path); err == nil {
-		existing, parseErr := ParseFile(path)
-		if parseErr == nil && existing.Version != c.Version {
-			return fmt.Errorf("contract %q already exists at version %d; use Amend to update", c.ID, existing.Version)
-		}
+		return fmt.Errorf("contract %q already exists; use Amend to update", c.ID)
 	}
 
 	composed, err := Compose(c)
@@ -187,5 +184,8 @@ func (s *Store) UpdateIndex() error {
 	}
 
 	indexPath := filepath.Join(s.dir, "index.md")
-	return os.WriteFile(indexPath, []byte(b.String()), 0o644)
+	if err := os.WriteFile(indexPath, []byte(b.String()), 0o644); err != nil {
+		return fmt.Errorf("writing contract index: %w", err)
+	}
+	return nil
 }

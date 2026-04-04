@@ -113,12 +113,16 @@ func cmdMCP() {
 		Logger:     newStderrLogger(),
 	}
 
-	// Load pool config to get approval mode for architect
+	// Load pool config to get approval mode for architect.
+	// Fail-closed: if config can't be loaded, the architect must not start
+	// with an empty approval mode (which would bypass human approval).
 	if role == "architect" {
 		poolCfg, err := config.LoadPool(poolDir)
-		if err == nil {
-			cfg.ApprovalMode = poolCfg.Architect.ApprovalMode
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading pool config for architect: %v\n", err)
+			os.Exit(1)
 		}
+		cfg.ApprovalMode = poolCfg.Architect.ApprovalMode
 	}
 
 	if err := agentmcp.Run(context.Background(), cfg); err != nil {

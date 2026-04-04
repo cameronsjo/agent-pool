@@ -837,9 +837,10 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 	return model, tools
 }
 
-// handleApprovalRequest processes a .pending file in the approvals directory.
+// handleApprovalRequest processes a .proposal.md file in the approvals directory.
 // It reads the proposal, presents it to the human via the configured presenter,
-// and writes the response. Runs in a goroutine so it doesn't block the event loop.
+// and writes a .approved or .rejected response. Runs in a goroutine so it doesn't
+// block the event loop.
 func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
 	filename := filepath.Base(path)
 	proposalID := approval.ProposalID(filename)

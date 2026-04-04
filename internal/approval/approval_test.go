@@ -47,16 +47,18 @@ func TestGate_RequestApproved(t *testing.T) {
 	}
 
 	// Respond approved after a short delay
+	respondErr := make(chan error, 1)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		if err := Respond(dir, "task-001", true, ""); err != nil {
-			t.Errorf("Respond: %v", err)
-		}
+		respondErr <- Respond(dir, "task-001", true, "")
 	}()
 
 	err := gate.Request(context.Background(), "task-001", "## Proposed task\n\nDo the thing.")
 	if err != nil {
 		t.Fatalf("expected approval, got error: %v", err)
+	}
+	if err := <-respondErr; err != nil {
+		t.Errorf("Respond: %v", err)
 	}
 }
 
@@ -68,16 +70,18 @@ func TestGate_RequestRejected(t *testing.T) {
 		Timeout:      5 * time.Second,
 	}
 
+	respondErr := make(chan error, 1)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		if err := Respond(dir, "task-002", false, ""); err != nil {
-			t.Errorf("Respond: %v", err)
-		}
+		respondErr <- Respond(dir, "task-002", false, "")
 	}()
 
 	err := gate.Request(context.Background(), "task-002", "proposal content")
 	if err == nil {
 		t.Fatal("expected rejection error, got nil")
+	}
+	if rErr := <-respondErr; rErr != nil {
+		t.Errorf("Respond: %v", rErr)
 	}
 	if !strings.Contains(err.Error(), "rejected") {
 		t.Errorf("error = %q, want to contain 'rejected'", err.Error())
@@ -92,16 +96,18 @@ func TestGate_RequestRejectedWithReason(t *testing.T) {
 		Timeout:      5 * time.Second,
 	}
 
+	respondErr := make(chan error, 1)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		if err := Respond(dir, "task-003", false, "needs more detail"); err != nil {
-			t.Errorf("Respond: %v", err)
-		}
+		respondErr <- Respond(dir, "task-003", false, "needs more detail")
 	}()
 
 	err := gate.Request(context.Background(), "task-003", "proposal")
 	if err == nil {
 		t.Fatal("expected rejection error")
+	}
+	if rErr := <-respondErr; rErr != nil {
+		t.Errorf("Respond: %v", rErr)
 	}
 	if !strings.Contains(err.Error(), "needs more detail") {
 		t.Errorf("error = %q, want to contain rejection reason", err.Error())
@@ -203,11 +209,10 @@ func TestFilePresenter_Approve(t *testing.T) {
 	reviewDir := t.TempDir()
 	p := &FilePresenter{ReviewDir: reviewDir, PollInterval: 50 * time.Millisecond}
 
+	writeErr := make(chan error, 1)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		if err := os.WriteFile(filepath.Join(reviewDir, "task-fp1.approved"), nil, 0o644); err != nil {
-			t.Errorf("writing .approved: %v", err)
-		}
+		writeErr <- os.WriteFile(filepath.Join(reviewDir, "task-fp1.approved"), nil, 0o644)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -220,17 +225,19 @@ func TestFilePresenter_Approve(t *testing.T) {
 	if !approved {
 		t.Error("expected approved=true")
 	}
+	if wErr := <-writeErr; wErr != nil {
+		t.Errorf("writing .approved: %v", wErr)
+	}
 }
 
 func TestFilePresenter_Reject(t *testing.T) {
 	reviewDir := t.TempDir()
 	p := &FilePresenter{ReviewDir: reviewDir, PollInterval: 50 * time.Millisecond}
 
+	writeErr := make(chan error, 1)
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		if err := os.WriteFile(filepath.Join(reviewDir, "task-fp2.rejected"), nil, 0o644); err != nil {
-			t.Errorf("writing .rejected: %v", err)
-		}
+		writeErr <- os.WriteFile(filepath.Join(reviewDir, "task-fp2.rejected"), nil, 0o644)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -242,6 +249,9 @@ func TestFilePresenter_Reject(t *testing.T) {
 	}
 	if approved {
 		t.Error("expected approved=false")
+	}
+	if wErr := <-writeErr; wErr != nil {
+		t.Errorf("writing .rejected: %v", wErr)
 	}
 }
 
@@ -256,7 +266,8 @@ func TestParseHumanInbox_Stdout(t *testing.T) {
 }
 
 func TestParseHumanInbox_File(t *testing.T) {
-	p, err := ParseHumanInbox("file:/tmp/reviews/", nil, nil)
+	dir := t.TempDir()
+	p, err := ParseHumanInbox("file:"+dir, nil, nil)
 	if err != nil {
 		t.Fatalf("ParseHumanInbox: %v", err)
 	}
@@ -264,8 +275,8 @@ func TestParseHumanInbox_File(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected FilePresenter, got %T", p)
 	}
-	if fp.ReviewDir != "/tmp/reviews/" {
-		t.Errorf("ReviewDir = %q, want /tmp/reviews/", fp.ReviewDir)
+	if fp.ReviewDir != dir {
+		t.Errorf("ReviewDir = %q, want %q", fp.ReviewDir, dir)
 	}
 }
 

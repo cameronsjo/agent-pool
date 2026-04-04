@@ -1963,7 +1963,12 @@ human_inbox = "stdout"
 	}
 
 	// Pipe "y\n" to stdin to auto-approve
-	stdinReader, stdinWriter, _ := os.Pipe()
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	defer stdinReader.Close()
+	defer stdinWriter.Close()
 	var stdoutBuf bytes.Buffer
 
 	fake := &fakeSpawner{}
@@ -2013,8 +2018,6 @@ human_inbox = "stdout"
 		t.Errorf("stdout should contain approval prompt, got %q", output)
 	}
 
-	stdinWriter.Close()
-	stdinReader.Close()
 	shutdownDaemon(t, cancel, errCh)
 }
 

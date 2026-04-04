@@ -19,54 +19,21 @@ type MCPServerEntry struct {
 	Type    string   `json:"type"`
 }
 
-// WriteTempConfig writes an MCP config JSON file to a temp directory and
-// returns the path. The caller is responsible for removing the file when done.
-//
-// The config points claude at the current agent-pool binary as the MCP server,
-// invoked as: agent-pool mcp --pool <poolDir> --expert <expertName>
+// WriteTempConfig writes an MCP config JSON file for an expert session.
+// The caller is responsible for removing the file when done.
 func WriteTempConfig(poolDir, expertName string) (string, error) {
-	binaryPath, err := resolveAgentPoolBinary()
-	if err != nil {
-		return "", fmt.Errorf("resolving agent-pool binary: %w", err)
-	}
-
-	cfg := MCPConfig{
-		MCPServers: map[string]MCPServerEntry{
-			"agent-pool": {
-				Command: binaryPath,
-				Args:    []string{"mcp", "--pool", poolDir, "--expert", expertName},
-				Type:    "stdio",
-			},
-		},
-	}
-
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshaling MCP config: %w", err)
-	}
-
-	tmp, err := os.CreateTemp("", "agent-pool-mcp-*.json")
-	if err != nil {
-		return "", fmt.Errorf("creating temp file: %w", err)
-	}
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmp.Name())
-		return "", fmt.Errorf("writing temp file: %w", err)
-	}
-
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmp.Name())
-		return "", fmt.Errorf("closing temp file: %w", err)
-	}
-
-	return tmp.Name(), nil
+	return writeTempConfigWithArgs([]string{"mcp", "--pool", poolDir, "--expert", expertName})
 }
 
 // WriteTempConfigForRole writes an MCP config JSON file for a built-in role
 // (architect, researcher, concierge). Uses --role instead of --expert.
 func WriteTempConfigForRole(poolDir, role string) (string, error) {
+	return writeTempConfigWithArgs([]string{"mcp", "--pool", poolDir, "--role", role})
+}
+
+// writeTempConfigWithArgs creates a temp MCP config JSON file pointing claude
+// at the current agent-pool binary with the given args.
+func writeTempConfigWithArgs(args []string) (string, error) {
 	binaryPath, err := resolveAgentPoolBinary()
 	if err != nil {
 		return "", fmt.Errorf("resolving agent-pool binary: %w", err)
@@ -76,7 +43,7 @@ func WriteTempConfigForRole(poolDir, role string) (string, error) {
 		MCPServers: map[string]MCPServerEntry{
 			"agent-pool": {
 				Command: binaryPath,
-				Args:    []string{"mcp", "--pool", poolDir, "--role", role},
+				Args:    args,
 				Type:    "stdio",
 			},
 		},

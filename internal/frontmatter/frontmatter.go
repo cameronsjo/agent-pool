@@ -40,8 +40,12 @@ func Split(content string) (header string, body string, err error) {
 
 	// Body starts after the closing delimiter line
 	afterClose := rest[idx+1+len(delimiter):]
-	// Skip rest of the delimiter line (could have trailing spaces)
+	// The closing delimiter line must contain only optional trailing whitespace
 	if nl := strings.IndexByte(afterClose, '\n'); nl >= 0 {
+		trailing := strings.TrimRight(afterClose[:nl], " \t")
+		if trailing != "" {
+			return "", "", fmt.Errorf("closing --- has trailing content: %q", afterClose[:nl])
+		}
 		body = afterClose[nl+1:]
 	}
 

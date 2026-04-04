@@ -99,12 +99,10 @@ func (p *FilePresenter) Present(ctx context.Context, proposalID, proposal string
 		case <-ticker.C:
 			if _, err := os.Stat(approvedPath); err == nil {
 				os.Remove(proposalPath)
-				os.Remove(approvedPath)
 				return true, nil
 			}
 			if _, err := os.Stat(rejectedPath); err == nil {
 				os.Remove(proposalPath)
-				os.Remove(rejectedPath)
 				return false, nil
 			}
 		}

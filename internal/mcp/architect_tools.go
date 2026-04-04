@@ -133,7 +133,12 @@ func handleSendTask(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		priority := mail.PriorityNormal
 		if priorityStr != "" {
-			priority = mail.Priority(priorityStr)
+			switch mail.Priority(priorityStr) {
+			case mail.PriorityLow, mail.PriorityNormal, mail.PriorityHigh, mail.PriorityUrgent:
+				priority = mail.Priority(priorityStr)
+			default:
+				return mcp.NewToolResultError(fmt.Sprintf("invalid priority %q: must be low, normal, high, or urgent", priorityStr)), nil
+			}
 		}
 
 		var contracts []string
@@ -195,8 +200,14 @@ func handleVerifyResult(cfg *ServerConfig, store *contract.Store) server.ToolHan
 		if taskID == "" {
 			return mcp.NewToolResultError("task_id parameter is required"), nil
 		}
+		if taskID != filepath.Base(taskID) || taskID == "." || taskID == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid task_id %q: must be a simple filename", taskID)), nil
+		}
 		if contractID == "" {
 			return mcp.NewToolResultError("contract_id parameter is required"), nil
+		}
+		if contractID != filepath.Base(contractID) || contractID == "." || contractID == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid contract_id %q: must be a simple filename", contractID)), nil
 		}
 		if status == "" {
 			return mcp.NewToolResultError("status parameter is required"), nil
