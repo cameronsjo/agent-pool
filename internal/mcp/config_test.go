@@ -13,7 +13,7 @@ import (
 	"os"
 	"testing"
 
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 )
 
 func TestWriteTempConfig_ValidJSON(t *testing.T) {

@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/hooks"
+	"github.com/cameronsjo/agent-pool/internal/hooks"
 )
 
 func testLogger() *slog.Logger {

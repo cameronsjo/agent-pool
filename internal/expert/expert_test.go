@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/expert"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/expert"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // ---------------------------------------------------------------------------

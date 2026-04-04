@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 )
 
 func TestServerConfig_Validate_HappyPath(t *testing.T) {

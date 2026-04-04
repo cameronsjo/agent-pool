@@ -48,10 +48,10 @@ import (
 
 	"encoding/json"
 
-	"git.sjo.lol/cameron/agent-pool/internal/config"
-	"git.sjo.lol/cameron/agent-pool/internal/daemon"
-	"git.sjo.lol/cameron/agent-pool/internal/expert"
-	"git.sjo.lol/cameron/agent-pool/internal/taskboard"
+	"github.com/cameronsjo/agent-pool/internal/config"
+	"github.com/cameronsjo/agent-pool/internal/daemon"
+	"github.com/cameronsjo/agent-pool/internal/expert"
+	"github.com/cameronsjo/agent-pool/internal/taskboard"
 )
 
 // fakeSpawner records calls and returns canned results.

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/config"
+	"github.com/cameronsjo/agent-pool/internal/config"
 )
 
 func TestLoadPool_FullConfig(t *testing.T) {

@@ -37,7 +37,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.sjo.lol/cameron/agent-pool/internal/expert"
+	"github.com/cameronsjo/agent-pool/internal/expert"
 )
 
 func TestReadState_AllPresent(t *testing.T) {

@@ -18,12 +18,12 @@ import (
 
 	"io"
 
-	"git.sjo.lol/cameron/agent-pool/internal/approval"
-	"git.sjo.lol/cameron/agent-pool/internal/config"
-	"git.sjo.lol/cameron/agent-pool/internal/expert"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
-	"git.sjo.lol/cameron/agent-pool/internal/taskboard"
+	"github.com/cameronsjo/agent-pool/internal/approval"
+	"github.com/cameronsjo/agent-pool/internal/config"
+	"github.com/cameronsjo/agent-pool/internal/expert"
+	"github.com/cameronsjo/agent-pool/internal/mail"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
+	"github.com/cameronsjo/agent-pool/internal/taskboard"
 )
 
 // Spawner abstracts expert session spawning for testability.

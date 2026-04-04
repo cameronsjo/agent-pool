@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.sjo.lol/cameron/agent-pool/internal/hooks"
+	"github.com/cameronsjo/agent-pool/internal/hooks"
 )
 
 func TestGuard_AllowsAll(t *testing.T) {

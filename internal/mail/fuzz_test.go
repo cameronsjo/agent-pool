@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // FuzzParse feeds arbitrary strings to mail.Parse and asserts no panic.

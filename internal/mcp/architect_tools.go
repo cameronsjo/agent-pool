@@ -11,9 +11,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"git.sjo.lol/cameron/agent-pool/internal/approval"
-	"git.sjo.lol/cameron/agent-pool/internal/contract"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/approval"
+	"github.com/cameronsjo/agent-pool/internal/contract"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // RegisterArchitectTools adds architect-scope tools to the MCP server.

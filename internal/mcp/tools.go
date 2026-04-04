@@ -12,8 +12,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"git.sjo.lol/cameron/agent-pool/internal/expert"
-	"git.sjo.lol/cameron/agent-pool/internal/mail"
+	"github.com/cameronsjo/agent-pool/internal/expert"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // RegisterExpertTools adds all expert-scope tools to the MCP server.

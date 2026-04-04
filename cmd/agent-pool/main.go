@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"git.sjo.lol/cameron/agent-pool/internal/config"
-	"git.sjo.lol/cameron/agent-pool/internal/daemon"
-	"git.sjo.lol/cameron/agent-pool/internal/hooks"
-	agentmcp "git.sjo.lol/cameron/agent-pool/internal/mcp"
+	"github.com/cameronsjo/agent-pool/internal/config"
+	"github.com/cameronsjo/agent-pool/internal/daemon"
+	"github.com/cameronsjo/agent-pool/internal/hooks"
+	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 )
 
 func main() {
