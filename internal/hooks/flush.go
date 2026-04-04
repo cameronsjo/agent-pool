@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"git.sjo.lol/cameron/agent-pool/internal/mail"
 )
 
 // FlushConfig holds the parameters for the flush hook.
@@ -40,7 +42,7 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 		return fmt.Errorf("invalid expert name %q: must not contain path separators", cfg.ExpertName)
 	}
 
-	expertDir := filepath.Join(cfg.PoolDir, "experts", cfg.ExpertName)
+	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
 	statePath := filepath.Join(expertDir, "state.md")
 
 	info, err := os.Stat(statePath)
@@ -73,3 +75,4 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 
 	return nil
 }
+

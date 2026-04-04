@@ -16,6 +16,9 @@ import (
 	"sync"
 	"time"
 
+	"io"
+
+	"git.sjo.lol/cameron/agent-pool/internal/approval"
 	"git.sjo.lol/cameron/agent-pool/internal/config"
 	"git.sjo.lol/cameron/agent-pool/internal/expert"
 	"git.sjo.lol/cameron/agent-pool/internal/mail"
@@ -41,6 +44,8 @@ type Daemon struct {
 	poolDir string
 	logger  *slog.Logger
 	spawner Spawner
+	stdin   io.Reader // for approval stdin (defaults to os.Stdin)
+	stdout  io.Writer // for approval stdout (defaults to os.Stdout)
 
 	mu        sync.Mutex
 	board     *taskboard.Board
@@ -54,6 +59,16 @@ type Option func(*Daemon)
 // WithSpawner sets a custom spawner (used in tests).
 func WithSpawner(s Spawner) Option {
 	return func(d *Daemon) { d.spawner = s }
+}
+
+// WithStdin sets a custom stdin reader for approval input (used in tests).
+func WithStdin(r io.Reader) Option {
+	return func(d *Daemon) { d.stdin = r }
+}
+
+// WithStdout sets a custom stdout writer for approval output (used in tests).
+func WithStdout(w io.Writer) Option {
+	return func(d *Daemon) { d.stdout = w }
 }
 
 // New creates a Daemon for the given pool.
@@ -102,6 +117,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("watching postoffice: %w", err)
 	}
 
+	// Watch architect inbox
+	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
+	if err := watcher.Add(architectInbox); err != nil {
+		return fmt.Errorf("watching architect inbox: %w", err)
+	}
+
+	// Watch approvals directory for human approval requests
+	approvalsDir := filepath.Join(d.poolDir, "approvals")
+	if err := watcher.Add(approvalsDir); err != nil {
+		return fmt.Errorf("watching approvals: %w", err)
+	}
+
 	// Watch each expert's inbox
 	for name := range d.cfg.Experts {
 		inboxDir := mail.ResolveInbox(d.poolDir, name)
@@ -139,6 +166,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 			if event.Dir == postofficeDir {
 				d.handlePostoffice(ctx, event.Path)
+			} else if event.Dir == approvalsDir {
+				go d.handleApprovalRequest(ctx, event.Path)
 			} else {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
@@ -464,9 +493,15 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 
 	model, tools := d.resolveExpertConfig(expertName)
 	projectDir := d.resolveProjectDir()
-	expertDir := filepath.Join(d.poolDir, "experts", expertName)
+	expertDir := d.resolveExpertDir(expertName)
 
-	mcpConfigPath, mcpErr := agentmcp.WriteTempConfig(d.poolDir, expertName)
+	var mcpConfigPath string
+	var mcpErr error
+	if mail.IsBuiltinRole(expertName) {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigForRole(d.poolDir, expertName)
+	} else {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfig(d.poolDir, expertName)
+	}
 	if mcpErr != nil {
 		d.logger.Error("Failed to write MCP config",
 			"expert", expertName,
@@ -496,7 +531,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		MCPConfigPath: mcpConfigPath,
 	}
 
-	timeout, parseErr := d.cfg.Defaults.ParseSessionTimeout()
+	timeout, parseErr := d.resolveSessionTimeout(expertName)
 	if parseErr != nil {
 		d.logger.Warn("Failed to parse session timeout, using default 10m",
 			"error", parseErr,
@@ -586,7 +621,13 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 // ensureTaskRegistered adds a task to the taskboard if it isn't already tracked.
 // This handles pre-existing inbox files from before the daemon started. Uses
 // the same ValidateAdd path as registerTask to enforce cycle/duplicate checks.
+// Only task and question types are tracked — notify and other types are skipped.
 func (d *Daemon) ensureTaskRegistered(msg *mail.Message) error {
+	// Only track task-like messages, matching the filter in handlePostoffice
+	if msg.Type != mail.TypeTask && msg.Type != mail.TypeQuestion {
+		return nil
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -678,9 +719,12 @@ func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
 	d.board.Save(d.boardPath)
 }
 
-// drainAllInboxes processes any files sitting in expert inboxes when the daemon starts.
-// Each expert drains in its own goroutine via handleInbox so they run concurrently.
+// drainAllInboxes processes any files sitting in expert and architect inboxes
+// when the daemon starts. Each drains in its own goroutine via handleInbox.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
+	// Drain architect inbox
+	go d.handleInbox(ctx, "architect", "")
+
 	for name := range d.cfg.Experts {
 		go d.handleInbox(ctx, name, "")
 	}
@@ -768,10 +812,18 @@ func (d *Daemon) drainPostoffice(ctx context.Context) {
 }
 
 // resolveExpertConfig returns the model and allowed tools for an expert,
-// falling back to pool defaults for empty values.
+// falling back to pool defaults for empty values. Built-in roles (architect)
+// use their own config section.
 func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string) {
 	model = d.cfg.Defaults.Model
 	tools = d.cfg.Defaults.AllowedTools
+
+	if name == "architect" {
+		if d.cfg.Architect.Model != "" {
+			model = d.cfg.Architect.Model
+		}
+		return model, tools
+	}
 
 	if ec, ok := d.cfg.Experts[name]; ok {
 		if ec.Model != "" {
@@ -783,6 +835,116 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 	}
 
 	return model, tools
+}
+
+// handleApprovalRequest processes a .proposal.md file in the approvals directory.
+// It reads the proposal, presents it to the human via the configured presenter,
+// and writes a .approved or .rejected response. Runs in a goroutine so it doesn't
+// block the event loop.
+func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
+	filename := filepath.Base(path)
+	proposalID := approval.ProposalID(filename)
+	if proposalID == "" {
+		return // not a .proposal.md file
+	}
+
+	if d.cfg.Architect.ApprovalMode == "none" {
+		// Auto-approve in none mode
+		approvalsDir := filepath.Join(d.poolDir, "approvals")
+		if err := approval.Respond(approvalsDir, proposalID, true, ""); err != nil {
+			d.logger.Error("Failed to auto-approve proposal",
+				"proposal_id", proposalID,
+				"error", err,
+			)
+		}
+		return
+	}
+
+	approvalsDir := filepath.Join(d.poolDir, "approvals")
+	proposal, err := approval.ReadProposal(approvalsDir, proposalID)
+	if err != nil {
+		d.logger.Error("Failed to read approval proposal",
+			"proposal_id", proposalID,
+			"error", err,
+		)
+		return
+	}
+
+	stdin := d.stdin
+	if stdin == nil {
+		stdin = os.Stdin
+	}
+	stdout := d.stdout
+	if stdout == nil {
+		stdout = os.Stdout
+	}
+
+	presenter, err := approval.ParseHumanInbox(d.cfg.Architect.HumanInbox, stdin, stdout)
+	if err != nil {
+		d.logger.Error("Failed to parse human_inbox config",
+			"value", d.cfg.Architect.HumanInbox,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("Presenting approval request to human",
+		"proposal_id", proposalID,
+		"mode", d.cfg.Architect.HumanInbox,
+	)
+
+	approved, err := presenter.Present(ctx, proposalID, proposal)
+	if err != nil {
+		d.logger.Error("Failed to present approval request",
+			"proposal_id", proposalID,
+			"error", err,
+		)
+		// Write rejection on presenter error so the tool handler unblocks
+		if respondErr := approval.Respond(approvalsDir, proposalID, false, fmt.Sprintf("presenter error: %v", err)); respondErr != nil {
+			d.logger.Error("Failed to write rejection after presenter error",
+				"proposal_id", proposalID,
+				"error", respondErr,
+			)
+		}
+		return
+	}
+
+	reason := ""
+	if !approved {
+		reason = "human rejected"
+	}
+
+	if err := approval.Respond(approvalsDir, proposalID, approved, reason); err != nil {
+		d.logger.Error("Failed to write approval response",
+			"proposal_id", proposalID,
+			"approved", approved,
+			"error", err,
+		)
+		return
+	}
+
+	d.logger.Info("Successfully processed approval request",
+		"proposal_id", proposalID,
+		"approved", approved,
+	)
+}
+
+// resolveSessionTimeout returns the session timeout for the given role or expert.
+// Built-in roles with their own timeout config use that; otherwise falls back to defaults.
+func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
+	if name == "architect" && d.cfg.Architect.SessionTimeout != "" {
+		dur, err := time.ParseDuration(d.cfg.Architect.SessionTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("parsing architect.session_timeout %q: %w", d.cfg.Architect.SessionTimeout, err)
+		}
+		return dur, nil
+	}
+	return d.cfg.Defaults.ParseSessionTimeout()
+}
+
+// resolveExpertDir returns the state directory for an expert or built-in role.
+func (d *Daemon) resolveExpertDir(name string) string {
+	return mail.ResolveExpertDir(d.poolDir, name)
 }
 
 // resolveProjectDir expands ~ in the pool's project directory setting.
@@ -797,7 +959,14 @@ func (d *Daemon) resolveProjectDir() string {
 }
 
 // resolveExpertName extracts the expert name from an inbox directory path.
+// Checks built-in roles (architect) first, then pool-scoped experts.
 func (d *Daemon) resolveExpertName(inboxDir string) string {
+	// Check architect first — it's the only built-in role we spawn in v0.4
+	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
+	if absEqual(inboxDir, architectInbox) {
+		return "architect"
+	}
+
 	for name := range d.cfg.Experts {
 		expected := mail.ResolveInbox(d.poolDir, name)
 		if absEqual(inboxDir, expected) {
@@ -811,8 +980,12 @@ func (d *Daemon) resolveExpertName(inboxDir string) string {
 func (d *Daemon) ensureDirs() error {
 	dirs := []string{
 		filepath.Join(d.poolDir, "postoffice"),
-		// Built-in roles get top-level inbox directories
+		filepath.Join(d.poolDir, "contracts"),
+		filepath.Join(d.poolDir, "approvals"),
+		// Built-in roles get top-level inbox + logs directories
 		filepath.Join(d.poolDir, "architect", "inbox"),
+		filepath.Join(d.poolDir, "architect", "logs"),
+		filepath.Join(d.poolDir, "architect", "verifications"),
 		filepath.Join(d.poolDir, "researcher", "inbox"),
 		filepath.Join(d.poolDir, "concierge", "inbox"),
 	}

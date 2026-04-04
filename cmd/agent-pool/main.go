@@ -83,21 +83,50 @@ func cmdStart() {
 }
 
 // cmdMCP starts the stdio MCP server. Stdout is the MCP transport; logs go to stderr.
+//
+// Two invocation modes:
+//
+//	agent-pool mcp --pool <dir> --expert <name>         Expert MCP server
+//	agent-pool mcp --pool <dir> --role <architect>      Built-in role MCP server
 func cmdMCP() {
-	flags := parseFlags(2, "pool", "expert")
+	flags := parseFlags(2, "pool", "expert", "role")
 
 	poolDir := flags["pool"]
 	expertName := flags["expert"]
+	role := flags["role"]
+
+	// --role and --expert are mutually exclusive
+	if role != "" && expertName != "" {
+		fmt.Fprintf(os.Stderr, "error: --role and --expert are mutually exclusive\n")
+		os.Exit(1)
+	}
+	if role != "" {
+		expertName = role
+	}
 
 	if poolDir == "" || expertName == "" {
 		fmt.Fprintf(os.Stderr, "usage: agent-pool mcp --pool <dir> --expert <name>\n")
+		fmt.Fprintf(os.Stderr, "       agent-pool mcp --pool <dir> --role <architect>\n")
 		os.Exit(1)
 	}
 
 	cfg := &agentmcp.ServerConfig{
 		PoolDir:    poolDir,
 		ExpertName: expertName,
+		Role:       role,
 		Logger:     newStderrLogger(),
+	}
+
+	// Load pool config to get approval mode for architect.
+	// Fail-closed: if config can't be loaded, the architect must not start
+	// with an empty approval mode (which would bypass human approval).
+	if role == "architect" {
+		poolCfg, err := config.LoadPool(poolDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading pool config for architect: %v\n", err)
+			os.Exit(1)
+		}
+		cfg.ApprovalMode = poolCfg.Architect.ApprovalMode
 	}
 
 	if err := agentmcp.Run(context.Background(), cfg); err != nil {
@@ -189,7 +218,8 @@ func printUsage() {
 
 Usage:
   agent-pool start [pool-dir]                          Start the daemon for a pool
-  agent-pool mcp --pool <dir> --expert <name>          Start MCP server (stdio)
+  agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
+  agent-pool mcp --pool <dir> --role <architect>       Start built-in role MCP server
   agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state
   agent-pool guard --pool <dir> --expert <name> --path <file> PreToolUse hook: ownership guard
   agent-pool version                                   Print version

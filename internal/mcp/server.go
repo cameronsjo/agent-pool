@@ -16,9 +16,11 @@ import (
 
 // ServerConfig holds the parameters for the MCP server instance.
 type ServerConfig struct {
-	PoolDir    string
-	ExpertName string
-	Logger     *slog.Logger
+	PoolDir      string
+	ExpertName   string // for experts: "auth"; for architect: "architect"
+	Role         string // "expert" (default) or "architect"
+	ApprovalMode string // architect only: "none", "decomposition", "all"
+	Logger       *slog.Logger
 }
 
 // Validate checks that required fields are set.
@@ -49,6 +51,9 @@ func Run(ctx context.Context, cfg *ServerConfig) error {
 	)
 
 	RegisterExpertTools(srv, cfg)
+	if cfg.Role == "architect" {
+		RegisterArchitectTools(srv, cfg)
+	}
 
 	cfg.Logger.Info("Preparing to serve MCP tools",
 		"pool_dir", cfg.PoolDir,

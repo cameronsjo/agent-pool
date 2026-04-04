@@ -19,12 +19,21 @@ type MCPServerEntry struct {
 	Type    string   `json:"type"`
 }
 
-// WriteTempConfig writes an MCP config JSON file to a temp directory and
-// returns the path. The caller is responsible for removing the file when done.
-//
-// The config points claude at the current agent-pool binary as the MCP server,
-// invoked as: agent-pool mcp --pool <poolDir> --expert <expertName>
+// WriteTempConfig writes an MCP config JSON file for an expert session.
+// The caller is responsible for removing the file when done.
 func WriteTempConfig(poolDir, expertName string) (string, error) {
+	return writeTempConfigWithArgs([]string{"mcp", "--pool", poolDir, "--expert", expertName})
+}
+
+// WriteTempConfigForRole writes an MCP config JSON file for a built-in role
+// (architect, researcher, concierge). Uses --role instead of --expert.
+func WriteTempConfigForRole(poolDir, role string) (string, error) {
+	return writeTempConfigWithArgs([]string{"mcp", "--pool", poolDir, "--role", role})
+}
+
+// writeTempConfigWithArgs creates a temp MCP config JSON file pointing claude
+// at the current agent-pool binary with the given args.
+func writeTempConfigWithArgs(args []string) (string, error) {
 	binaryPath, err := resolveAgentPoolBinary()
 	if err != nil {
 		return "", fmt.Errorf("resolving agent-pool binary: %w", err)
@@ -34,7 +43,7 @@ func WriteTempConfig(poolDir, expertName string) (string, error) {
 		MCPServers: map[string]MCPServerEntry{
 			"agent-pool": {
 				Command: binaryPath,
-				Args:    []string{"mcp", "--pool", poolDir, "--expert", expertName},
+				Args:    args,
 				Type:    "stdio",
 			},
 		},

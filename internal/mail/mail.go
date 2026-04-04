@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"git.sjo.lol/cameron/agent-pool/internal/frontmatter"
 )
 
 // MessageType enumerates the kinds of mail messages.
@@ -79,7 +81,7 @@ func ParseFile(path string) (*Message, error) {
 // Parse parses a mail message from its raw string content.
 // sourcePath is recorded on the returned Message for reference.
 func Parse(content string, sourcePath string) (*Message, error) {
-	header, body, err := splitFrontmatter(content)
+	header, body, err := frontmatter.Split(content)
 	if err != nil {
 		return nil, fmt.Errorf("splitting frontmatter: %w", err)
 	}
@@ -124,37 +126,3 @@ func Parse(content string, sourcePath string) (*Message, error) {
 	return &msg, nil
 }
 
-// splitFrontmatter splits content at --- delimiters into YAML header and body.
-func splitFrontmatter(content string) (header string, body string, err error) {
-	const delimiter = "---"
-
-	trimmed := strings.TrimLeft(content, " \t\r\n")
-	if !strings.HasPrefix(trimmed, delimiter) {
-		return "", "", fmt.Errorf("content does not start with --- delimiter")
-	}
-
-	// Skip the opening delimiter
-	rest := trimmed[len(delimiter):]
-	rest = strings.TrimLeft(rest, " \t")
-	if len(rest) == 0 || rest[0] != '\n' {
-		return "", "", fmt.Errorf("opening --- must be followed by a newline")
-	}
-	rest = rest[1:]
-
-	// Find the closing delimiter
-	idx := strings.Index(rest, "\n"+delimiter)
-	if idx < 0 {
-		return "", "", fmt.Errorf("no closing --- delimiter found")
-	}
-
-	header = rest[:idx]
-
-	// Body starts after the closing delimiter line
-	afterClose := rest[idx+1+len(delimiter):]
-	// Skip rest of the delimiter line (could have trailing spaces)
-	if nl := strings.IndexByte(afterClose, '\n'); nl >= 0 {
-		body = afterClose[nl+1:]
-	}
-
-	return header, body, nil
-}
