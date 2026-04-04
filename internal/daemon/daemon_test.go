@@ -35,11 +35,13 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1934,6 +1936,136 @@ Contract contract-001 has been amended to version 2.
 		if _, ok := board.Tasks["notify-contract-001-v2-auth"]; ok {
 			t.Error("notify message should NOT be registered in taskboard")
 		}
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ApprovalStdoutMode(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[architect]
+model = "opus"
+approval_mode = "decomposition"
+human_inbox = "stdout"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	// Pipe "y\n" to stdin to auto-approve
+	stdinReader, stdinWriter, _ := os.Pipe()
+	var stdoutBuf bytes.Buffer
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger,
+		daemon.WithSpawner(fake),
+		daemon.WithStdin(stdinReader),
+		daemon.WithStdout(&stdoutBuf),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Write a pending approval request to approvals/
+	approvalsDir := filepath.Join(poolDir, "approvals")
+	proposalContent := "Task: task-approval-test\nTo: auth\n\nImplement token endpoint"
+	os.WriteFile(filepath.Join(approvalsDir, "task-approval-test.proposal.md"), []byte(proposalContent), 0o644)
+
+	// Wait for daemon to detect and present the proposal
+	time.Sleep(500 * time.Millisecond)
+
+	// Write approval via stdin
+	stdinWriter.Write([]byte("y\n"))
+
+	// Wait for response file
+	approvedPath := filepath.Join(approvalsDir, "task-approval-test.approved")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(approvedPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(approvedPath); os.IsNotExist(err) {
+		t.Error("expected .approved file after stdin approval")
+	}
+
+	// Verify stdout contains the proposal
+	output := stdoutBuf.String()
+	if !strings.Contains(output, "APPROVAL REQUEST") {
+		t.Errorf("stdout should contain approval prompt, got %q", output)
+	}
+
+	stdinWriter.Close()
+	stdinReader.Close()
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ApprovalNoneAutoApproves(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[architect]
+model = "opus"
+approval_mode = "none"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Write a pending approval
+	approvalsDir := filepath.Join(poolDir, "approvals")
+	os.WriteFile(filepath.Join(approvalsDir, "task-auto-001.proposal.md"), []byte("auto task"), 0o644)
+
+	// Should auto-approve in "none" mode
+	approvedPath := filepath.Join(approvalsDir, "task-auto-001.approved")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(approvedPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(approvedPath); os.IsNotExist(err) {
+		t.Error("expected auto-approval in none mode")
 	}
 
 	shutdownDaemon(t, cancel, errCh)

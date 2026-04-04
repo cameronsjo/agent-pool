@@ -842,9 +842,9 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 // and writes the response. Runs in a goroutine so it doesn't block the event loop.
 func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
 	filename := filepath.Base(path)
-	proposalID := approval.PendingProposalID(filename)
+	proposalID := approval.ProposalID(filename)
 	if proposalID == "" {
-		return // not a .pending file
+		return // not a .proposal.md file
 	}
 
 	if d.cfg.Architect.ApprovalMode == "none" {

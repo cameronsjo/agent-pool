@@ -9,7 +9,7 @@
 // Respond (Classification: FILESYSTEM I/O)
 //   [x] Happy: approved writes .approved file (TestRespond_Approved)
 //   [x] Happy: rejected writes .rejected file with reason (TestRespond_Rejected)
-//   [x] Error: no pending proposal returns error (TestRespond_NoPending)
+//   [x] Error: no proposal file returns error (TestRespond_NoProposal)
 //
 // StdoutPresenter (Classification: I/O)
 //   [x] Happy: y input returns true (TestStdoutPresenter_Approve)
@@ -24,8 +24,8 @@
 //   [x] Happy: file: returns FilePresenter (TestParseHumanInbox_File)
 //   [x] Error: unsupported value (TestParseHumanInbox_Unsupported)
 //
-// PendingProposalID (Classification: PURE LOGIC)
-//   [x] Happy: extracts ID from .pending filename (TestPendingProposalID)
+// ProposalID (Classification: PURE LOGIC)
+//   [x] Happy: extracts ID from .proposal.md filename (TestProposalID)
 package approval
 
 import (
@@ -127,8 +127,8 @@ func TestGate_RequestTimeout(t *testing.T) {
 
 func TestRespond_Approved(t *testing.T) {
 	dir := t.TempDir()
-	// Create pending marker
-	if err := os.WriteFile(filepath.Join(dir, "task-r1.pending"), nil, 0o644); err != nil {
+	// Create proposal file
+	if err := os.WriteFile(filepath.Join(dir, "task-r1.proposal.md"), []byte("proposal"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -143,7 +143,7 @@ func TestRespond_Approved(t *testing.T) {
 
 func TestRespond_Rejected(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "task-r2.pending"), nil, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "task-r2.proposal.md"), []byte("proposal"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -160,11 +160,11 @@ func TestRespond_Rejected(t *testing.T) {
 	}
 }
 
-func TestRespond_NoPending(t *testing.T) {
+func TestRespond_NoProposal(t *testing.T) {
 	dir := t.TempDir()
 	err := Respond(dir, "nonexistent", true, "")
 	if err == nil {
-		t.Fatal("expected error for missing pending marker")
+		t.Fatal("expected error for missing proposal file")
 	}
 }
 
@@ -276,21 +276,22 @@ func TestParseHumanInbox_Unsupported(t *testing.T) {
 	}
 }
 
-func TestPendingProposalID(t *testing.T) {
+func TestProposalID(t *testing.T) {
 	tests := []struct {
 		input string
 		want  string
 	}{
-		{"task-001.pending", "task-001"},
-		{"my-proposal.pending", "my-proposal"},
-		{".pending", ""},
+		{"task-001.proposal.md", "task-001"},
+		{"my-proposal.proposal.md", "my-proposal"},
+		{".proposal.md", ""},
 		{"no-suffix.txt", ""},
+		{"task-001.pending", ""},
 		{"", ""},
 	}
 	for _, tt := range tests {
-		got := PendingProposalID(tt.input)
+		got := ProposalID(tt.input)
 		if got != tt.want {
-			t.Errorf("PendingProposalID(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("ProposalID(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

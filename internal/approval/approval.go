@@ -4,12 +4,11 @@
 // Communication between the two processes uses the filesystem.
 //
 // Protocol:
-//  1. Tool handler writes {id}.proposal.md (the task details)
-//  2. Tool handler writes {id}.pending (marker for daemon)
-//  3. Tool handler polls for {id}.approved or {id}.rejected
-//  4. Daemon detects .pending, presents proposal to human
-//  5. Daemon writes .approved or .rejected based on human response
-//  6. Tool handler reads response, proceeds or returns error
+//  1. Tool handler writes {id}.proposal.md (the task details — also triggers daemon via fsnotify)
+//  2. Tool handler polls for {id}.approved or {id}.rejected
+//  3. Daemon detects .proposal.md, reads it, presents to human
+//  4. Daemon writes .approved or .rejected based on human response
+//  5. Tool handler reads response, proceeds or returns error
 package approval
 
 import (
@@ -51,16 +50,11 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 		return fmt.Errorf("creating approvals dir: %w", err)
 	}
 
-	// Write proposal content
+	// Write proposal content — this also triggers the daemon via fsnotify
+	// (the file ends in .md, which the watcher accepts)
 	proposalPath := filepath.Join(g.ApprovalsDir, proposalID+".proposal.md")
 	if err := os.WriteFile(proposalPath, []byte(proposal), 0o644); err != nil {
 		return fmt.Errorf("writing proposal: %w", err)
-	}
-
-	// Write pending marker to signal the daemon
-	pendingPath := filepath.Join(g.ApprovalsDir, proposalID+".pending")
-	if err := os.WriteFile(pendingPath, nil, 0o644); err != nil {
-		return fmt.Errorf("writing pending marker: %w", err)
 	}
 
 	// Poll for response
@@ -87,14 +81,14 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 		case <-deadlineCtx.Done():
 			// Clean up proposal files on timeout
 			os.Remove(proposalPath)
-			os.Remove(pendingPath)
+			
 			return fmt.Errorf("approval timed out after %v", timeout)
 
 		case <-ticker.C:
 			if _, err := os.Stat(approvedPath); err == nil {
 				// Clean up all approval files
 				os.Remove(proposalPath)
-				os.Remove(pendingPath)
+				
 				os.Remove(approvedPath)
 				return nil
 			}
@@ -103,7 +97,7 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 				reason, _ := os.ReadFile(rejectedPath)
 				// Clean up
 				os.Remove(proposalPath)
-				os.Remove(pendingPath)
+				
 				os.Remove(rejectedPath)
 				if len(reason) > 0 {
 					return fmt.Errorf("proposal rejected: %s", string(reason))
@@ -114,12 +108,12 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 	}
 }
 
-// Respond writes an approval or rejection response for a pending proposal.
+// Respond writes an approval or rejection response for a proposal.
 // Called by the daemon after the human reviews.
 func Respond(approvalsDir, proposalID string, approved bool, reason string) error {
-	pendingPath := filepath.Join(approvalsDir, proposalID+".pending")
-	if _, err := os.Stat(pendingPath); err != nil {
-		return fmt.Errorf("no pending proposal %q: %w", proposalID, err)
+	proposalPath := filepath.Join(approvalsDir, proposalID+".proposal.md")
+	if _, err := os.Stat(proposalPath); err != nil {
+		return fmt.Errorf("no proposal %q: %w", proposalID, err)
 	}
 
 	if approved {
@@ -141,10 +135,10 @@ func ReadProposal(approvalsDir, proposalID string) (string, error) {
 	return string(data), nil
 }
 
-// PendingProposalID extracts the proposal ID from a .pending filename.
+// ProposalID extracts the proposal ID from a .proposal.md filename.
 // Returns empty string if the file doesn't match the pattern.
-func PendingProposalID(filename string) string {
-	const suffix = ".pending"
+func ProposalID(filename string) string {
+	const suffix = ".proposal.md"
 	if len(filename) <= len(suffix) {
 		return ""
 	}

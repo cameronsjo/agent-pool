@@ -330,7 +330,33 @@ func TestRoute_ParseError(t *testing.T) {
 	}
 }
 
+func TestIsBuiltinRole(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"architect", true},
+		{"researcher", true},
+		{"concierge", true},
+		{"auth", false},
+		{"frontend", false},
+		{"", false},
+		{"Architect", false}, // case-sensitive
+	}
+	for _, tt := range tests {
+		got := mail.IsBuiltinRole(tt.name)
+		if got != tt.want {
+			t.Errorf("IsBuiltinRole(%q) = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 // Test Plan for router.go
+//
+// IsBuiltinRole (Classification: PURE LOGIC)
+//   [x] Happy: known builtin roles return true (TestIsBuiltinRole)
+//   [x] Unhappy: non-builtin names return false (TestIsBuiltinRole)
+//   [x] Boundary: empty string, case sensitivity (TestIsBuiltinRole)
 //
 // ResolveInbox (Classification: PURE LOGIC)
 //   [x] Happy: builtin roles resolve correctly (TestResolveInbox_BuiltinRoles)

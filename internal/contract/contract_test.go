@@ -266,3 +266,92 @@ func TestStore_AmendNotFound(t *testing.T) {
 		t.Fatal("expected error amending nonexistent contract")
 	}
 }
+
+// --- Fuzz harnesses ---
+
+func FuzzParse(f *testing.F) {
+	f.Add("---\nid: c1\ntype: contract\ndefined-by: arch\nbetween: [a, b]\nversion: 1\ntimestamp: 2026-04-01T00:00:00Z\n---\n\nbody\n")
+	f.Add("---\nid: x\ntype: contract\nbetween: []\nversion: 0\n---\n")
+	f.Add("")
+	f.Add("no frontmatter")
+	f.Add("---\n---\n")
+
+	f.Fuzz(func(t *testing.T, input string) {
+		// Must not panic for any input
+		_, _ = Parse(input)
+	})
+}
+
+func FuzzComposeParseRoundTrip(f *testing.F) {
+	f.Add("contract-001", "architect", "auth", "frontend", "body content")
+	f.Add("c-1", "arch", "a", "b", "## Spec\n\nDetails.")
+	f.Add("simple", "def", "x", "y", "")
+
+	f.Fuzz(func(t *testing.T, id, definedBy, party1, party2, body string) {
+		// Skip inputs that would fail validation
+		if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
+			return
+		}
+		if party1 == "" || party2 == "" {
+			return
+		}
+
+		c := &Contract{
+			ID:        id,
+			Type:      "contract",
+			DefinedBy: definedBy,
+			Between:   []string{party1, party2},
+			Version:   1,
+			Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			Body:      body,
+		}
+
+		composed, err := Compose(c)
+		if err != nil {
+			return // composition can fail for some inputs (e.g., YAML special chars)
+		}
+
+		parsed, err := Parse(composed)
+		if err != nil {
+			t.Fatalf("Parse failed after successful Compose: %v\ncomposed:\n%s", err, composed)
+		}
+
+		if parsed.ID != c.ID {
+			t.Errorf("ID round-trip: got %q, want %q", parsed.ID, c.ID)
+		}
+		if parsed.Version != c.Version {
+			t.Errorf("Version round-trip: got %d, want %d", parsed.Version, c.Version)
+		}
+	})
+}
+
+// --- Additional gap-filling tests ---
+
+func TestStore_ListSkipsMalformedFiles(t *testing.T) {
+	poolDir := t.TempDir()
+	store := NewStore(poolDir)
+
+	// Save a valid contract
+	if err := store.Save(validContract); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Write a malformed contract file
+	malformedPath := filepath.Join(poolDir, "contracts", "bad-contract.md")
+	if err := os.WriteFile(malformedPath, []byte("not valid frontmatter"), 0o644); err != nil {
+		t.Fatalf("writing malformed: %v", err)
+	}
+
+	list, err := store.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+
+	// Should return only the valid contract, skipping the malformed one
+	if len(list) != 1 {
+		t.Errorf("List length = %d, want 1 (malformed should be skipped)", len(list))
+	}
+	if len(list) > 0 && list[0].ID != "contract-001" {
+		t.Errorf("first contract = %q, want contract-001", list[0].ID)
+	}
+}
