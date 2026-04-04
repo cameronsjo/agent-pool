@@ -540,6 +540,42 @@ func TestExtractSummary_WhitespaceOnlyResult(t *testing.T) {
 	}
 }
 
+func TestExtractResult_ValidStreamJSON(t *testing.T) {
+	output := `{"type":"start","session_id":"abc"}
+{"type":"result","result":"Successfully implemented the token endpoint with PKCE support."}
+`
+	result := expert.ExtractResult([]byte(output))
+	if result != "Successfully implemented the token endpoint with PKCE support." {
+		t.Errorf("result = %q", result)
+	}
+}
+
+func TestExtractResult_NoTruncation(t *testing.T) {
+	long := strings.Repeat("x", 300)
+	output := `{"type":"result","result":"` + long + `"}`
+	result := expert.ExtractResult([]byte(output))
+	if len(result) != 300 {
+		t.Errorf("result length = %d, want 300 (no truncation)", len(result))
+	}
+}
+
+func TestExtractResult_EmptyOutput(t *testing.T) {
+	result := expert.ExtractResult([]byte{})
+	if result != "(no result available)" {
+		t.Errorf("result = %q, want fallback", result)
+	}
+}
+
+func TestExtractResult_MultipleResults_UsesLast(t *testing.T) {
+	output := `{"type":"result","result":"first"}
+{"type":"result","result":"second and final"}
+`
+	result := expert.ExtractResult([]byte(output))
+	if result != "second and final" {
+		t.Errorf("result = %q, want %q", result, "second and final")
+	}
+}
+
 func TestAssemblePrompt_EmptyFiles(t *testing.T) {
 	dir := t.TempDir()
 
@@ -740,6 +776,12 @@ func TestWriteStderr(t *testing.T) {
 //   [x] Unhappy: nil config (TestAssemblePrompt_NilConfig)
 //   [x] Boundary: empty files (exist but whitespace-only) (TestAssemblePrompt_EmptyFiles)
 //   [x] Boundary: empty task body (TestAssemblePrompt_EmptyTaskBody)
+//
+// ExtractResult (Classification: INPUT PARSER)
+//   [x] Happy: valid stream-json (TestExtractResult_ValidStreamJSON)
+//   [x] Boundary: no truncation for long output (TestExtractResult_NoTruncation)
+//   [x] Boundary: empty output (TestExtractResult_EmptyOutput)
+//   [x] Boundary: multiple results uses last (TestExtractResult_MultipleResults_UsesLast)
 //
 // ExtractSummary (Classification: INPUT PARSER)
 //   [x] Happy: valid stream-json (TestExtractSummary_ValidStreamJSON)

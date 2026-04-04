@@ -21,7 +21,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	if cfg == nil {
 		return
 	}
-	expertDir := filepath.Join(cfg.PoolDir, "experts", cfg.ExpertName)
+	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
 
 	srv.AddTool(
 		mcp.NewTool("pool_read_state",

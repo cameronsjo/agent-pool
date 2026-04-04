@@ -31,7 +31,7 @@ func main() {
 	case "guard":
 		cmdGuard()
 	case "version":
-		fmt.Println("agent-pool v0.2.0-dev")
+		fmt.Println("agent-pool v0.5.0-dev")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -219,13 +219,18 @@ func printUsage() {
 Usage:
   agent-pool start [pool-dir]                          Start the daemon for a pool
   agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
-  agent-pool mcp --pool <dir> --role <architect>       Start built-in role MCP server
+  agent-pool mcp --pool <dir> --role <role>            Start built-in role MCP server
   agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state
   agent-pool guard --pool <dir> --expert <name> --path <file> PreToolUse hook: ownership guard
   agent-pool version                                   Print version
   agent-pool help                                      Show this help
 
+Roles:
+  architect    Contract definition, task delegation, verification
+  concierge    User-facing coordination (read/write path tools)
+  researcher   Enrichment and curation
+
 Examples:
   agent-pool start ~/.agent-pool/pools/api-gateway
-  agent-pool start              # uses current directory`)
+  agent-pool mcp --pool ./my-pool --role concierge`)
 }

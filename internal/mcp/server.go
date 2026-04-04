@@ -47,12 +47,15 @@ func Run(ctx context.Context, cfg *ServerConfig) error {
 
 	srv := server.NewMCPServer(
 		"agent-pool",
-		"0.2.0",
+		"0.5.0",
 	)
 
 	RegisterExpertTools(srv, cfg)
 	if cfg.Role == "architect" {
 		RegisterArchitectTools(srv, cfg)
+	}
+	if cfg.Role == "concierge" {
+		RegisterConciergeTools(srv, cfg)
 	}
 
 	cfg.Logger.Info("Preparing to serve MCP tools",
