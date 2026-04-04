@@ -14,7 +14,7 @@
 //   [x] Happy: Amend increments version (TestStore_Amend)
 //   [x] Happy: List returns all contracts sorted (TestStore_List)
 //   [x] Happy: UpdateIndex creates markdown table (TestStore_UpdateIndex)
-//   [x] Error: Save duplicate with different version (TestStore_SaveDuplicateVersion)
+//   [x] Error: Save duplicate contract ID (TestStore_SaveDuplicateRejects)
 //   [x] Error: Load nonexistent (TestStore_LoadNotFound)
 //   [x] Error: Amend nonexistent (TestStore_AmendNotFound)
 package contract

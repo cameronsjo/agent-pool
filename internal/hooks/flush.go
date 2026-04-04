@@ -42,7 +42,7 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 		return fmt.Errorf("invalid expert name %q: must not contain path separators", cfg.ExpertName)
 	}
 
-	expertDir := resolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
 	statePath := filepath.Join(expertDir, "state.md")
 
 	info, err := os.Stat(statePath)
@@ -76,10 +76,3 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 	return nil
 }
 
-// resolveExpertDir returns the state directory for an expert or built-in role.
-func resolveExpertDir(poolDir, name string) string {
-	if mail.IsBuiltinRole(name) {
-		return filepath.Join(poolDir, name)
-	}
-	return filepath.Join(poolDir, "experts", name)
-}

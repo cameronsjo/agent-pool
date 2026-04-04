@@ -95,7 +95,11 @@ func cmdMCP() {
 	expertName := flags["expert"]
 	role := flags["role"]
 
-	// --role sets both role and expert name for built-in roles
+	// --role and --expert are mutually exclusive
+	if role != "" && expertName != "" {
+		fmt.Fprintf(os.Stderr, "error: --role and --expert are mutually exclusive\n")
+		os.Exit(1)
+	}
 	if role != "" {
 		expertName = role
 	}

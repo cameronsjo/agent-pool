@@ -66,7 +66,7 @@ func (s *Store) Save(c *Contract) error {
 	}
 
 	if err := s.UpdateIndex(); err != nil {
-		return err
+		return fmt.Errorf("updating contract index after save: %w", err)
 	}
 
 	s.logger.Info("Successfully saved contract",

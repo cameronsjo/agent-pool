@@ -79,6 +79,9 @@ func handleDefineContract(store *contract.Store) server.ToolHandlerFunc {
 		if id == "" {
 			return mcp.NewToolResultError("id parameter is required"), nil
 		}
+		if id != filepath.Base(id) || id == "." || id == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid contract ID %q: must be a simple filename", id)), nil
+		}
 		if between == "" {
 			return mcp.NewToolResultError("between parameter is required"), nil
 		}

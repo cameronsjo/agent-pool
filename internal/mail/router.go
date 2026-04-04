@@ -21,6 +21,15 @@ func IsBuiltinRole(name string) bool {
 	return builtinRoles[name]
 }
 
+// ResolveExpertDir returns the state directory for an expert or built-in role.
+// Built-in roles use {poolDir}/{role}/, experts use {poolDir}/experts/{name}/.
+func ResolveExpertDir(poolDir, name string) string {
+	if builtinRoles[name] {
+		return filepath.Join(poolDir, name)
+	}
+	return filepath.Join(poolDir, "experts", name)
+}
+
 // ResolveInbox returns the inbox directory path for a recipient within a pool.
 //
 // Built-in roles (architect, researcher, concierge):

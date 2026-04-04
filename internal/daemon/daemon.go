@@ -900,7 +900,12 @@ func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
 			"error", err,
 		)
 		// Write rejection on presenter error so the tool handler unblocks
-		approval.Respond(approvalsDir, proposalID, false, fmt.Sprintf("presenter error: %v", err))
+		if respondErr := approval.Respond(approvalsDir, proposalID, false, fmt.Sprintf("presenter error: %v", err)); respondErr != nil {
+			d.logger.Error("Failed to write rejection after presenter error",
+				"proposal_id", proposalID,
+				"error", respondErr,
+			)
+		}
 		return
 	}
 
@@ -938,12 +943,8 @@ func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
 }
 
 // resolveExpertDir returns the state directory for an expert or built-in role.
-// Built-in roles use {poolDir}/{role}/, experts use {poolDir}/experts/{name}/.
 func (d *Daemon) resolveExpertDir(name string) string {
-	if mail.IsBuiltinRole(name) {
-		return filepath.Join(d.poolDir, name)
-	}
-	return filepath.Join(d.poolDir, "experts", name)
+	return mail.ResolveExpertDir(d.poolDir, name)
 }
 
 // resolveProjectDir expands ~ in the pool's project directory setting.
