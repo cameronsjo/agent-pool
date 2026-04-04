@@ -58,41 +58,30 @@ See [docs/plans/architecture.md](docs/plans/architecture.md) for the full design
 
 ## How Agent Pool Compares
 
-Agent Pool draws inspiration from two prominent multi-agent frameworks — [Gas Town](https://github.com/steveyegge/gastown) and [OpenClaw](https://github.com/openclaw/openclaw) — while making different architectural bets.
+Agent Pool draws inspiration from two prominent multi-agent frameworks — [Gas Town](https://github.com/steveyegge/gastown) and [OpenClaw](https://github.com/openclaw/openclaw) — while making different architectural bets. *(Comparisons as of 2026-04-04.)*
 
-### Gas Town *(as of 2026-04-04)*
+| | [Gas Town](https://github.com/steveyegge/gastown) | [OpenClaw](https://github.com/openclaw/openclaw) | **Agent Pool** |
+|---|---|---|---|
+| **Focus** | Parallel coding at scale | General-purpose personal assistant | Domain-specialist dev workflows |
+| **Scale** | 20-30 agents per swarm | Single agent, multi-channel | 4-8 focused experts per pool |
+| **Coordination** | tmux + git worktrees + Beads | Always-on Gateway daemon | Filesystem mail + fsnotify |
+| **Activation** | GUPP (pull-based) | Channel routing | GUPP-inspired (mail triggers spawn) |
+| **State** | Dolt/SQLite data plane | Persistent Gateway + compaction | Plain files (TOML + Markdown) |
+| **Session model** | Long-running tmux sessions | Persistent with compaction | Disposable `claude -p` per task |
+| **Identity** | Per-rig config | SOUL.md + workspace files | identity.md + state.md + errors.md |
+| **Agent support** | Multi-provider (10+) | Multi-LLM (Claude, GPT-4o, Gemini) | Claude Code only (by design) |
+| **Tool system** | CLI commands + file drops | Skills (SKILL.md) + plugins | MCP server (per-role tool sets) |
+| **Runtime** | Go (~189k LOC) | Node.js (16GB RAM rec.) | Go binary (~5k LOC, ~20MB) |
+| **Contract system** | Beads (issues) | None | Architect-managed interface specs |
+| **Role hierarchy** | Mayor, Pole Cats, Refinery, Deacon, Witness | Flat (peer agents) | Concierge, Architect, Expert, Researcher |
 
-Steve Yegge's multi-agent workspace manager orchestrates 20-30 parallel coding agents through tmux sessions, git worktrees, and the Beads issue tracker. Agents coordinate via a Mad Max-themed role hierarchy (Mayor, Pole Cats, Refinery, Deacon, Witness) with a watchdog chain for health monitoring. It supports Claude, Gemini, Codex, Cursor, and others.
+### Design Lineage
 
-| | Gas Town | Agent Pool |
-|---|---|---|
-| **Scope** | Factory-scale swarms (20-30 agents) | Focused specialist pools (4-8 experts) |
-| **Coordination** | tmux sessions + git worktrees + Beads | Filesystem mail + fsnotify + MCP server |
-| **Activation** | GUPP (pull-based) | GUPP-inspired (mail delivery triggers spawn) |
-| **State** | Dolt/SQLite data plane | Plain files (TOML config, Markdown state) |
-| **Session model** | Long-running tmux sessions | Disposable headless `claude -p` per task |
-| **Agent support** | Multi-provider (10+ agents) | Claude Code only (by design) |
-| **Complexity** | ~189k LOC, Homebrew/npm install | ~5k LOC, single Go binary |
+**From Gas Town:** GUPP, handoff mechanics, log recall, formulas, named roles.
+Left behind: scale ambition, Dolt data plane, multi-provider support.
 
-**What we took:** GUPP, handoff mechanics, log recall, formulas, named roles.
-**What we left:** The scale ambition, Dolt data plane, multi-provider support, Mad Max branding.
-
-### OpenClaw *(as of 2026-04-04)*
-
-Peter Steinberger's personal AI assistant framework provides a persistent Gateway daemon as the control plane for multi-channel messaging (WhatsApp, Telegram, Slack, Discord, and 15+ more). Agents are defined through a workspace-as-brain model with SOUL.md identity files and a skills ecosystem. It supports Claude, GPT-4o, Gemini, and DeepSeek.
-
-| | OpenClaw | Agent Pool |
-|---|---|---|
-| **Focus** | General-purpose personal assistant | Developer tooling (code-focused) |
-| **Coordination** | Always-on Gateway daemon | On-demand process supervisor |
-| **Identity** | SOUL.md + workspace file taxonomy | identity.md + state.md + errors.md |
-| **Self-improvement** | Skill extraction + plugin ecosystem | Structured error capture + promotion ladder |
-| **Session model** | Persistent Gateway with compaction | Fresh session per task, knowledge on disk |
-| **Agent support** | Multi-LLM (Claude, GPT-4o, Gemini, DeepSeek) | Claude Code only |
-| **Runtime** | Node.js (16GB RAM recommended) | Go binary (~20MB) |
-
-**What we took:** Workspace-as-brain, self-improvement patterns, promotion ladder, compaction flush, identity split.
-**What we left:** Always-on Gateway, plugin ecosystem, multi-LLM support, multi-channel messaging.
+**From OpenClaw:** Workspace-as-brain, self-improvement patterns, promotion ladder, compaction flush, identity split.
+Left behind: always-on Gateway, plugin ecosystem, multi-LLM support, multi-channel messaging.
 
 ### Agent Pool's Niche
 
