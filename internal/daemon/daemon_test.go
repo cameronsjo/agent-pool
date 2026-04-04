@@ -31,6 +31,7 @@
 //   - ArchitectSpawn: message to architect routes and spawns with opus model
 //   - ArchitectConfigResolution: architect uses opus, auth uses haiku
 //   - ArchitectInboxDrainOnStart: pre-existing inbox message processed on startup
+//   - NotifyRoutedNotRegistered: notify messages route to inbox but skip taskboard
 package daemon_test
 
 import (
@@ -1861,6 +1862,78 @@ model = "opus"
 	}
 	if calls[0].Name != "architect" {
 		t.Errorf("spawn name = %q, want architect", calls[0].Name)
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_NotifyRoutedNotRegistered(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Write a notify message (contract amendment notification) to postoffice
+	notifyContent := fmt.Sprintf(`---
+id: notify-contract-001-v2-auth
+from: architect
+to: auth
+type: notify
+contracts: [contract-001]
+timestamp: 2026-04-01T14:32:00Z
+---
+
+Contract contract-001 has been amended to version 2.
+`)
+	postPath := filepath.Join(poolDir, "postoffice", "notify-contract-001-v2-auth.md")
+	os.WriteFile(postPath, []byte(notifyContent), 0o644)
+
+	// Wait for routing
+	inboxFile := filepath.Join(poolDir, "experts", "auth", "inbox", "notify-contract-001-v2-auth.md")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(inboxFile); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(inboxFile); os.IsNotExist(err) {
+		t.Fatal("notify message was not routed to auth inbox")
+	}
+
+	// Allow processing time
+	time.Sleep(500 * time.Millisecond)
+
+	// Verify: taskboard does NOT contain this notify message
+	boardPath := filepath.Join(poolDir, "taskboard.json")
+	if _, err := os.Stat(boardPath); err == nil {
+		board := loadTaskboard(t, poolDir)
+		if _, ok := board.Tasks["notify-contract-001-v2-auth"]; ok {
+			t.Error("notify message should NOT be registered in taskboard")
+		}
 	}
 
 	shutdownDaemon(t, cancel, errCh)

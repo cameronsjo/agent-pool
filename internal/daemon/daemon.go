@@ -598,7 +598,13 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 // ensureTaskRegistered adds a task to the taskboard if it isn't already tracked.
 // This handles pre-existing inbox files from before the daemon started. Uses
 // the same ValidateAdd path as registerTask to enforce cycle/duplicate checks.
+// Only task and question types are tracked — notify and other types are skipped.
 func (d *Daemon) ensureTaskRegistered(msg *mail.Message) error {
+	// Only track task-like messages, matching the filter in handlePostoffice
+	if msg.Type != mail.TypeTask && msg.Type != mail.TypeQuestion {
+		return nil
+	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
