@@ -21,7 +21,7 @@ Four roles coordinate the work:
 - **Contracts before code** — architect defines interfaces between experts before work starts
 - **Knowledge has a lifecycle** — learnings graduate from logs to state to identity
 - **Pools + shared experts** — project-scoped pools with reusable cross-project specialists
-- **Zero-dependency message bus** — filesystem + fsnotify, no databases or queues
+- **Zero-infrastructure message bus** — filesystem + fsnotify, no databases or queues
 - **Daemon-managed scheduling** — bookkeeping in Go, not in the LLM
 
 ## Quick Start
@@ -77,11 +77,13 @@ Agent Pool draws inspiration from two prominent multi-agent frameworks — [Gas 
 
 ### Design Lineage
 
-**From Gas Town:** GUPP, handoff mechanics, log recall, formulas, named roles.
+**From [Gas Town](https://github.com/steveyegge/gastown):** GUPP, handoff mechanics, log recall, formulas, named roles.
 Left behind: scale ambition, Dolt data plane, multi-provider support.
 
-**From OpenClaw:** Workspace-as-brain, self-improvement patterns, promotion ladder, compaction flush, identity split.
+**From [OpenClaw](https://github.com/openclaw/openclaw):** Workspace-as-brain, self-improvement patterns, promotion ladder, compaction flush, identity split.
 Left behind: always-on Gateway, plugin ecosystem, multi-LLM support, multi-channel messaging.
+
+See [architecture doc § Design Lineage](docs/plans/architecture.md#design-lineage) for full provenance and references.
 
 ### Agent Pool's Niche
 
