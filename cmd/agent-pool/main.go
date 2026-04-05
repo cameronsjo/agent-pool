@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -67,9 +68,21 @@ func cmdStart() {
 		os.Exit(1)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	// Log to {poolDir}/daemon.log by default, tee to stdout as well
+	logPath := filepath.Join(poolDir, "daemon.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening log file %s: %v\n", logPath, err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+
+	logWriter := io.MultiWriter(os.Stdout, logFile)
+	logger := slog.New(slog.NewJSONHandler(logWriter, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+
+	logger.Info("Logging to file", "path", logPath)
 
 	ctx, stop := signal.NotifyContext(context.Background(),
 		syscall.SIGTERM, syscall.SIGINT)
