@@ -79,6 +79,25 @@ type ExpertSection struct {
 	AllowedTools []string `toml:"allowed_tools"`
 }
 
+// SharedExpertDir returns the user-level directory for a shared expert.
+// The path is ~/.agent-pool/experts/{name}/. The name must be a simple
+// filename (no path separators, not "." or "..").
+func SharedExpertDir(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("shared expert name is empty")
+	}
+	if name != filepath.Base(name) || name == "." || name == ".." {
+		return "", fmt.Errorf("invalid shared expert name %q: must be a simple filename", name)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolving home directory: %w", err)
+	}
+
+	return filepath.Join(home, ".agent-pool", "experts", name), nil
+}
+
 // DiscoverPoolDir finds the pool directory by checking:
 //  1. The given path (if non-empty)
 //  2. Current directory for pool.toml

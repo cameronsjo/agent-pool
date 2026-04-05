@@ -14,6 +14,13 @@
 //   [x] Happy: valid duration "10m" (TestDefaultsSection_ParseSessionTimeout)
 //   [x] Happy: valid duration "30s" (TestDefaultsSection_ParseSessionTimeout)
 //   [x] Unhappy: invalid duration string (TestDefaultsSection_ParseSessionTimeout)
+//
+// SharedExpertDir (Classification: PATH RESOLVER)
+//   [x] Happy: returns ~/.agent-pool/experts/{name}/
+//   [x] Unhappy: empty name
+//   [x] Unhappy: path traversal (../)
+//   [x] Unhappy: dot name (.)
+//   [x] Unhappy: path separator in name
 
 package config_test
 
@@ -339,6 +346,52 @@ func assertSliceEqual(t *testing.T, field string, expected []string, actual []st
 			t.Errorf("%s[%d]: expected %q, got %q", field, i, expected[i], actual[i])
 		}
 	}
+}
+
+func TestSharedExpertDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home directory: %v", err)
+	}
+
+	t.Run("happy path", func(t *testing.T) {
+		dir, err := config.SharedExpertDir("security-standards")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := filepath.Join(home, ".agent-pool", "experts", "security-standards")
+		if dir != expected {
+			t.Errorf("got %q, want %q", dir, expected)
+		}
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		_, err := config.SharedExpertDir("")
+		if err == nil {
+			t.Fatal("expected error for empty name")
+		}
+	})
+
+	t.Run("path traversal", func(t *testing.T) {
+		_, err := config.SharedExpertDir("../evil")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+	})
+
+	t.Run("dot name", func(t *testing.T) {
+		_, err := config.SharedExpertDir(".")
+		if err == nil {
+			t.Fatal("expected error for dot name")
+		}
+	})
+
+	t.Run("path separator", func(t *testing.T) {
+		_, err := config.SharedExpertDir("foo/bar")
+		if err == nil {
+			t.Fatal("expected error for path separator")
+		}
+	})
 }
 
 func TestDefaultsSection_ParseSessionTimeout(t *testing.T) {
