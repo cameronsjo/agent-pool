@@ -28,6 +28,7 @@ type SpawnConfig struct {
 	AllowedTools  []string
 	ProjectDir    string        // working directory for claude
 	ExpertDir     string        // contains identity.md, state.md, errors.md
+	OverlayDir    string        // pool-scoped overlay for shared experts (optional)
 	PoolDir       string        // pool root directory (set as AGENT_POOL_DIR env var)
 	TaskMessage   *mail.Message // the task to execute
 	MCPConfigPath string        // path to MCP config JSON; if set, --mcp-config is added
@@ -70,6 +71,21 @@ func AssemblePrompt(cfg *SpawnConfig) (string, error) {
 		b.WriteString("## Current State\n\n")
 		b.WriteString(state)
 		b.WriteString("\n\n")
+	}
+
+	// Project-specific overlay state (shared experts only).
+	// When OverlayDir is set, read state.md from the overlay directory
+	// and emit it under a separate heading.
+	if cfg.OverlayDir != "" {
+		overlayState, overlayErr := readOptionalFile(cfg.OverlayDir, "state.md")
+		if overlayErr != nil {
+			return "", fmt.Errorf("reading overlay state: %w", overlayErr)
+		}
+		if overlayState != "" {
+			b.WriteString("## Project State\n\n")
+			b.WriteString(overlayState)
+			b.WriteString("\n\n")
+		}
 	}
 
 	if errors != "" {
