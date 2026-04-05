@@ -1215,6 +1215,21 @@ func (d *Daemon) ensureDirs() error {
 		}
 	}
 
+	// Warn if shared expert user-level directory is missing identity.md
+	for _, name := range d.cfg.Shared.Include {
+		userDir, resolveErr := mail.ResolveSharedExpertDir(name)
+		if resolveErr != nil {
+			continue
+		}
+		identityPath := filepath.Join(userDir, "identity.md")
+		if _, err := os.Stat(identityPath); os.IsNotExist(err) {
+			d.logger.Warn("Shared expert missing identity.md at user level",
+				"expert", name,
+				"expected", identityPath,
+			)
+		}
+	}
+
 	return nil
 }
 
