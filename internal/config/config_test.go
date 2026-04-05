@@ -132,7 +132,7 @@ project_dir = "/tmp/project"
 	}
 
 	assertEqual(t, "Defaults.Model", "sonnet", cfg.Defaults.Model)
-	assertEqual(t, "Defaults.SessionTimeout", "10m", cfg.Defaults.SessionTimeout)
+	assertEqual(t, "Defaults.SessionTimeout", "", cfg.Defaults.SessionTimeout) // no default — sessions run to completion
 	assertSliceEqual(t, "Defaults.AllowedTools",
 		[]string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
 		cfg.Defaults.AllowedTools,
@@ -183,7 +183,7 @@ func TestLoadPool_EmptyFile(t *testing.T) {
 
 	// All defaults should be applied
 	assertEqual(t, "Defaults.Model", "sonnet", cfg.Defaults.Model)
-	assertEqual(t, "Defaults.SessionTimeout", "10m", cfg.Defaults.SessionTimeout)
+	assertEqual(t, "Defaults.SessionTimeout", "", cfg.Defaults.SessionTimeout) // no default — sessions run to completion
 	assertSliceEqual(t, "Defaults.AllowedTools",
 		[]string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"},
 		cfg.Defaults.AllowedTools,
@@ -352,7 +352,7 @@ func TestDefaultsSection_ParseSessionTimeout(t *testing.T) {
 		{"30 seconds", "30s", 30 * time.Second, false},
 		{"1 hour", "1h", time.Hour, false},
 		{"invalid", "invalid", 0, true},
-		{"empty", "", 0, true},
+		{"empty", "", 0, false}, // empty = no timeout, sessions run to completion
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

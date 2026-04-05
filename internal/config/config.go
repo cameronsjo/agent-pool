@@ -61,7 +61,11 @@ type CurationSection struct {
 }
 
 // ParseSessionTimeout parses the session timeout string to a time.Duration.
+// Returns (0, nil) when the timeout is empty, meaning sessions run to completion.
 func (d DefaultsSection) ParseSessionTimeout() (time.Duration, error) {
+	if d.SessionTimeout == "" {
+		return 0, nil
+	}
 	dur, err := time.ParseDuration(d.SessionTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("parsing defaults.session_timeout %q: %w", d.SessionTimeout, err)
@@ -152,7 +156,8 @@ func LoadPool(poolDir string) (*PoolConfig, error) {
 		cfg.Defaults.Model = "sonnet"
 	}
 	if cfg.Defaults.SessionTimeout == "" {
-		cfg.Defaults.SessionTimeout = "10m"
+		// No default session timeout — sessions run to completion.
+		// Set session_timeout in pool.toml to impose a limit.
 	}
 	if len(cfg.Defaults.AllowedTools) == 0 {
 		cfg.Defaults.AllowedTools = []string{"Read", "Write", "Edit", "Bash", "Grep", "Glob"}

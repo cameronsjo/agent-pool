@@ -599,12 +599,18 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 
 	timeout, parseErr := d.resolveSessionTimeout(expertName)
 	if parseErr != nil {
-		d.logger.Warn("Failed to parse session timeout, using default 10m",
+		d.logger.Warn("Failed to parse session timeout, running without timeout",
 			"error", parseErr,
 		)
-		timeout = 10 * time.Minute
 	}
-	spawnCtx, spawnCancel := context.WithTimeout(ctx, timeout)
+
+	var spawnCtx context.Context
+	var spawnCancel context.CancelFunc
+	if timeout > 0 {
+		spawnCtx, spawnCancel = context.WithTimeout(ctx, timeout)
+	} else {
+		spawnCtx, spawnCancel = context.WithCancel(ctx)
+	}
 	defer spawnCancel()
 
 	result, err := d.spawner.Spawn(spawnCtx, d.logger, cfg)
