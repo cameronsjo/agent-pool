@@ -69,13 +69,22 @@ func ResolveSharedLogDir(poolDir, name string) string {
 // Route parses a message from the postoffice, copies it to the recipient's
 // inbox, and deletes the original. Delivery is at-least-once: the copy
 // completes before the delete.
-func Route(logger *slog.Logger, poolDir, filePath string) (*Message, error) {
+//
+// sharedNames lists experts that are shared (user-level). Messages to shared
+// experts are routed to the pool-scoped shared-state inbox. Pass nil when
+// no shared experts are configured.
+func Route(logger *slog.Logger, poolDir, filePath string, sharedNames map[string]bool) (*Message, error) {
 	msg, err := ParseFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("parsing message for routing: %w", err)
 	}
 
-	inboxDir := ResolveInbox(poolDir, msg.To)
+	var inboxDir string
+	if sharedNames[msg.To] {
+		inboxDir = ResolveSharedInbox(poolDir, msg.To)
+	} else {
+		inboxDir = ResolveInbox(poolDir, msg.To)
+	}
 
 	if _, err := os.Stat(inboxDir); err != nil {
 		return nil, fmt.Errorf("inbox not available for recipient %q: %w", msg.To, err)

@@ -65,7 +65,7 @@ Do the thing.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	msg, err := mail.Route(logger, poolDir, srcPath)
+	msg, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err != nil {
 		t.Fatalf("Route failed: %v", err)
 	}
@@ -105,7 +105,7 @@ This should fail.
 	os.WriteFile(srcPath, []byte(msgContent), 0o644)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown recipient")
 	}
@@ -146,7 +146,7 @@ Idempotent delivery test.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err != nil {
 		t.Fatalf("Route failed on idempotent delivery: %v", err)
 	}
@@ -195,7 +195,7 @@ This should fail and preserve the original.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when inbox directory does not exist")
 	}
@@ -245,7 +245,7 @@ Unreadable source test.
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when source file is unreadable")
 	}
@@ -290,7 +290,7 @@ Read-only inbox test.
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when inbox directory is read-only")
 	}
@@ -315,7 +315,7 @@ func TestRoute_ParseError(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid message content")
 	}
