@@ -748,18 +748,21 @@ The user-facing integration.
 
 **Validates:** Does the full read/write path flow feel fluid from the user's perspective?
 
-### v0.6 — Shared Experts + Multi-Pool
+### v0.6 — Daemon Lifecycle + Observability
 
-Cross-project knowledge.
+Operational foundation. Reshuffled from v0.8 based on dogfooding (2026-04-05).
+Issues: #8, #9, #10, #11, #13.
 
-- [ ] `~/.agent-pool/experts/` shared directory
-- [ ] `shared.include` in pool.toml
-- [ ] Layered state assembly (user + project overlay)
-- [ ] `scope` parameter in `pool_update_state`
-- [ ] Per-pool `shared-state/` overlays auto-created on first use
-- [ ] Multi-pool daemon (watch multiple pool directories)
+- [ ] Unix domain socket for CLI→daemon communication (`daemon.sock`)
+- [ ] `agent-pool stop` — connect to socket, send shutdown RPC
+- [ ] `agent-pool status` — connect to socket, return live stats
+- [ ] `agent-pool watch` — stream events via socket, render TUI dashboard
+- [ ] Graceful shutdown with drain (sync.WaitGroup, 30s timeout, double-signal)
+- [ ] Remove default session timeout — sessions run to completion (#11)
+- [ ] Drop `pool_` prefix from MCP tool names (#13)
+- [ ] launchd plist template for macOS backgrounding
 
-**Validates:** Does the shared expert model work across pools? Does layered state assembly produce coherent prompts?
+**Validates:** Can you operate a pool without staring at raw JSON logs? Can you stop/restart without pkill?
 
 ### v0.7 — Researcher + Curation
 
@@ -774,16 +777,20 @@ Knowledge enrichment and hygiene.
 
 **Validates:** Does curation keep state.md lean over time? Does cold-start seeding produce useful initial state?
 
-### v0.8 — Formulas + Polish
+### v0.8 — Shared Experts + Multi-Pool
 
-Workflow templates and operational hardening.
+Cross-project knowledge. Moved from v0.6 — not blocking real usage during dogfooding.
 
-- [ ] TOML formula parsing
-- [ ] Formula instantiation by architect
+- [ ] `~/.agent-pool/experts/` shared directory
+- [ ] `shared.include` in pool.toml
+- [ ] Layered state assembly (user + project overlay)
+- [ ] `scope` parameter in `pool_update_state`
+- [ ] Per-pool `shared-state/` overlays auto-created on first use
+- [ ] Multi-pool daemon (watch multiple pool directories)
+- [ ] TOML formula parsing and instantiation
 - [ ] Config hot-reload (watch pool.toml)
-- [ ] Graceful shutdown (signal handling, drain in-flight)
-- [ ] Partial-write detection on mail files
-- [ ] Operational logging (daemon itself, structured JSON)
+
+**Validates:** Does the shared expert model work across pools? Does layered state assembly produce coherent prompts?
 
 ## Design Lineage
 
