@@ -1,3 +1,14 @@
+// Test plan for tools.go (v0.7 shared expert scope):
+//
+//update_state (shared expert):
+//   - scope=project → writes to SharedOverlayDir/state.md
+//   - scope=user → writes to expertDir/state.md (user-level)
+//   - default scope → project
+//   - pool-scoped expert → scope ignored, writes to expertDir
+//
+//read_state (shared expert):
+//   - returns project_state field alongside state
+//
 // Test plan for tools.go:
 //
 // Each handler is tested by constructing a JSON-RPC tools/call message,
@@ -303,5 +314,145 @@ func TestSearchIndex_NoMatches(t *testing.T) {
 	text := resultText(t, result)
 	if !strings.Contains(text, "no matching") {
 		t.Errorf("result = %q, want 'no matching tasks found'", text)
+	}
+}
+
+// --- Shared expert scoped state tests ---
+
+// setupSharedExpertPool creates pool dirs and a user-level expert dir (simulated
+// by a temp dir since we can't override HOME in unit tests).
+func setupSharedExpertPool(t *testing.T) (poolDir, userExpertDir, overlayDir string) {
+	t.Helper()
+	poolDir = makePoolDirs(t, "postoffice", "shared-state/security-standards")
+	userExpertDir = t.TempDir() // simulates ~/.agent-pool/experts/security-standards/
+	overlayDir = filepath.Join(poolDir, "shared-state", "security-standards")
+	return
+}
+
+func TestUpdateState_SharedExpert_ProjectScope(t *testing.T) {
+	poolDir, _, overlayDir := setupSharedExpertPool(t)
+	srv := buildSharedMCPTestServer(t, poolDir, "security-standards", overlayDir)
+
+	result := callTool(t, srv, "update_state", map[string]any{
+		"content": "project-specific knowledge",
+		"scope":   "project",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "project") {
+		t.Errorf("result = %q, want mention of project", text)
+	}
+
+	// Verify file written to overlay dir
+	data, err := os.ReadFile(filepath.Join(overlayDir, "state.md"))
+	if err != nil {
+		t.Fatalf("reading overlay state.md: %v", err)
+	}
+	if !strings.Contains(string(data), "project-specific knowledge") {
+		t.Errorf("overlay state.md = %q, want 'project-specific knowledge'", string(data))
+	}
+}
+
+func TestUpdateState_SharedExpert_UserScope(t *testing.T) {
+	// Set HOME to a temp dir so ResolveSharedExpertDir resolves to a controlled path
+	fakeHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", fakeHome)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	// Create the user-level shared expert directory
+	userExpertDir := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards")
+	os.MkdirAll(userExpertDir, 0o755)
+
+	poolDir, _, overlayDir := setupSharedExpertPool(t)
+	srv := buildSharedMCPTestServer(t, poolDir, "security-standards", overlayDir)
+
+	result := callTool(t, srv, "update_state", map[string]any{
+		"content": "user-level knowledge",
+		"scope":   "user",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "user") {
+		t.Errorf("result = %q, want mention of user", text)
+	}
+
+	// Verify file written to user-level dir
+	data, err := os.ReadFile(filepath.Join(userExpertDir, "state.md"))
+	if err != nil {
+		t.Fatalf("reading user-level state.md: %v", err)
+	}
+	if !strings.Contains(string(data), "user-level knowledge") {
+		t.Errorf("user-level state.md = %q, want 'user-level knowledge'", string(data))
+	}
+}
+
+func TestUpdateState_SharedExpert_DefaultScope(t *testing.T) {
+	poolDir, _, overlayDir := setupSharedExpertPool(t)
+	srv := buildSharedMCPTestServer(t, poolDir, "security-standards", overlayDir)
+
+	// No scope param = defaults to "project"
+	result := callTool(t, srv, "update_state", map[string]any{
+		"content": "default-scope content",
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "project") {
+		t.Errorf("result = %q, want mention of project (default scope)", text)
+	}
+
+	data, err := os.ReadFile(filepath.Join(overlayDir, "state.md"))
+	if err != nil {
+		t.Fatalf("reading overlay state.md: %v", err)
+	}
+	if !strings.Contains(string(data), "default-scope content") {
+		t.Errorf("overlay state.md = %q, want 'default-scope content'", string(data))
+	}
+}
+
+func TestUpdateState_PoolScoped_ScopeIgnored(t *testing.T) {
+	poolDir, expertDir := setupExpertPool(t, "auth")
+
+	srv := buildMCPTestServer(t, poolDir, "auth", "")
+	result := callTool(t, srv, "update_state", map[string]any{
+		"content": "pool-scoped state",
+		"scope":   "user", // should be ignored for pool-scoped experts
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "updated") {
+		t.Errorf("result = %q, want 'updated'", text)
+	}
+
+	// Verify written to expertDir (pool-scoped)
+	data, err := os.ReadFile(filepath.Join(expertDir, "state.md"))
+	if err != nil {
+		t.Fatalf("reading state.md: %v", err)
+	}
+	if !strings.Contains(string(data), "pool-scoped state") {
+		t.Errorf("state.md = %q, want 'pool-scoped state'", string(data))
+	}
+}
+
+func TestReadState_SharedExpert_IncludesProjectState(t *testing.T) {
+	poolDir, _, overlayDir := setupSharedExpertPool(t)
+
+	// The expertDir for the MCP server is resolved by RegisterExpertTools.
+	// For shared experts, it calls ResolveSharedExpertDir which needs HOME.
+	// In unit tests, we write state files to whatever dir the server uses.
+	// Since we can't control HOME here, we'll use the overlay dir test.
+
+	// Write overlay state
+	os.WriteFile(filepath.Join(overlayDir, "state.md"), []byte("Project overlay state"), 0o644)
+
+	srv := buildSharedMCPTestServer(t, poolDir, "security-standards", overlayDir)
+	result := callTool(t, srv, "read_state", map[string]any{})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "project_state") {
+		t.Errorf("result should contain 'project_state' key, got: %s", text)
+	}
+	if !strings.Contains(text, "Project overlay state") {
+		t.Errorf("result should contain overlay state content, got: %s", text)
 	}
 }

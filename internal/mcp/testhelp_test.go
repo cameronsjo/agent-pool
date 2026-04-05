@@ -201,6 +201,45 @@ func listToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
 	return names
 }
 
+// buildSharedMCPTestServer creates an MCP server configured for a shared expert.
+// The expert's state dir is expertDir (user-level), with overlayDir for project state.
+func buildSharedMCPTestServer(t *testing.T, poolDir, expertName, overlayDir string) *server.MCPServer {
+	t.Helper()
+	cfg := &agentmcp.ServerConfig{
+		PoolDir:          poolDir,
+		ExpertName:       expertName,
+		Role:             "expert",
+		IsShared:         true,
+		SharedOverlayDir: overlayDir,
+		Logger:           slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+	}
+	srv := server.NewMCPServer("agent-pool-test", "0.5.0-test")
+	agentmcp.RegisterExpertTools(srv, cfg)
+
+	initMsg := mustJSON(t, map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-03-26",
+			"capabilities":   map[string]any{},
+			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
+		},
+	})
+	resp := srv.HandleMessage(context.Background(), initMsg)
+	respBytes, _ := json.Marshal(resp)
+	var initResp struct {
+		Error *struct{ Code int; Message string } `json:"error"`
+	}
+	if err := json.Unmarshal(respBytes, &initResp); err != nil {
+		t.Fatalf("unmarshaling init response: %v", err)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("MCP init failed: %d %s", initResp.Error.Code, initResp.Error.Message)
+	}
+	return srv
+}
+
 // mustJSON marshals v to JSON or fails the test.
 func mustJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
