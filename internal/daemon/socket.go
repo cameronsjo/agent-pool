@@ -69,7 +69,7 @@ func (s *socketServer) serve(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			s.logger.Warn("Socket accept error", "error", err)
+			s.logger.Warn("Failed to accept socket connection", "error", err)
 			continue
 		}
 		go s.handleConn(ctx, conn)
@@ -90,6 +90,9 @@ func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	var req socketRequest
 	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		s.logger.Warn("Failed to parse socket request",
+			"error", err,
+		)
 		s.writeResponse(conn, socketResponse{
 			Status:  "error",
 			Message: "invalid request: " + err.Error(),
@@ -99,6 +102,7 @@ func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
 
 	switch req.Method {
 	case "stop":
+		s.logger.Info("Received stop command via socket")
 		s.writeResponse(conn, socketResponse{
 			Status: "ok",
 			Data:   map[string]string{"message": "shutting down"},
@@ -106,16 +110,18 @@ func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
 		s.cancel()
 
 	case "status":
-		data := s.daemon.Status()
 		s.writeResponse(conn, socketResponse{
 			Status: "ok",
-			Data:   data,
+			Data:   s.daemon.Status(),
 		})
 
 	case "subscribe":
 		s.handleSubscribe(ctx, conn)
 
 	default:
+		s.logger.Warn("Received unknown socket method",
+			"method", req.Method,
+		)
 		s.writeResponse(conn, socketResponse{
 			Status:  "error",
 			Message: fmt.Sprintf("unknown method: %s", req.Method),
@@ -129,6 +135,10 @@ func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
 func (s *socketServer) handleSubscribe(ctx context.Context, conn net.Conn) {
 	id, ch := s.daemon.events.subscribe()
 	defer s.daemon.events.unsubscribe(id)
+
+	s.logger.Debug("Preparing to stream events to subscriber",
+		"subscriber_id", id,
+	)
 
 	// Send ack
 	s.writeResponse(conn, socketResponse{
@@ -147,7 +157,10 @@ func (s *socketServer) handleSubscribe(ctx context.Context, conn net.Conn) {
 				return
 			}
 			if err := enc.Encode(event); err != nil {
-				return // client disconnected
+				s.logger.Debug("Subscriber disconnected",
+					"subscriber_id", id,
+				)
+				return
 			}
 		case <-ctx.Done():
 			return

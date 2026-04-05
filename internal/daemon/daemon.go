@@ -190,7 +190,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-childCtx.Done():
-			d.logger.Info("Shutting down daemon, draining in-flight work",
+			d.logger.Info("Preparing to drain in-flight work",
 				"pool", d.cfg.Pool.Name,
 				"drain_timeout", d.drainTimeout,
 			)
@@ -198,9 +198,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 			go func() { d.wg.Wait(); close(done) }()
 			select {
 			case <-done:
-				d.logger.Info("All in-flight work completed")
+				d.logger.Info("Successfully drained all in-flight work")
 			case <-time.After(d.drainTimeout):
-				d.logger.Warn("Drain timeout exceeded, forcing shutdown")
+				d.logger.Warn("Skipping drain. Reason: timeout exceeded",
+					"drain_timeout", d.drainTimeout,
+				)
 			}
 			return nil
 
