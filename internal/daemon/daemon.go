@@ -1142,6 +1142,15 @@ func (d *Daemon) ensureDirs() error {
 		)
 	}
 
+	// Shared experts get pool-scoped shared-state directories for inbox and logs.
+	// Identity and user-level state live at ~/.agent-pool/experts/{name}/ (not created here).
+	for _, name := range d.cfg.Shared.Include {
+		dirs = append(dirs,
+			mail.ResolveSharedInbox(d.poolDir, name),
+			mail.ResolveSharedLogDir(d.poolDir, name),
+		)
+	}
+
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
@@ -1149,6 +1158,16 @@ func (d *Daemon) ensureDirs() error {
 	}
 
 	return nil
+}
+
+// isSharedExpert reports whether the named expert is in the pool's shared.include list.
+func (d *Daemon) isSharedExpert(name string) bool {
+	for _, shared := range d.cfg.Shared.Include {
+		if shared == name {
+			return true
+		}
+	}
+	return false
 }
 
 // absEqual compares two paths after resolving to absolute form.

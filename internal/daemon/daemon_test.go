@@ -251,6 +251,45 @@ Test routing.
 	}
 }
 
+func TestDaemon_EnsureDirsCreatesSharedStateDirs(t *testing.T) {
+	poolDir := t.TempDir()
+
+	cfg := writePoolConfig(t, poolDir, `[pool]
+name = "shared-test"
+project_dir = "PROJECT_DIR"
+
+[shared]
+include = ["security-standards", "corporate-policies"]
+
+[experts.auth]
+model = "sonnet"
+`)
+
+	cancel, errCh := startTestDaemon(t, cfg, poolDir, &fakeSpawner{})
+	defer func() {
+		cancel()
+		<-errCh
+	}()
+
+	// Verify shared-state directories were created
+	for _, name := range []string{"security-standards", "corporate-policies"} {
+		for _, sub := range []string{"inbox", "logs"} {
+			dir := filepath.Join(poolDir, "shared-state", name, sub)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				t.Errorf("expected shared-state directory %s to exist", dir)
+			}
+		}
+	}
+
+	// Verify pool-scoped expert dirs still created
+	for _, sub := range []string{"inbox", "logs"} {
+		dir := filepath.Join(poolDir, "experts", "auth", sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			t.Errorf("expected pool-scoped expert directory %s to exist", dir)
+		}
+	}
+}
+
 // writeMessage writes a YAML-frontmatter mail file to the given directory.
 func writeMessage(t *testing.T, dir, id, from, to string) string {
 	t.Helper()
