@@ -354,12 +354,20 @@ func pollForCompletion(ctx context.Context, cfg *ServerConfig, taskID string) (s
 }
 
 // readExpertResult reads the expert's session log and extracts the full result.
+// Checks pool-scoped expert dir first, then shared-state dir for shared experts.
 func readExpertResult(poolDir, expertName, taskID string) (string, error) {
 	expertDir := mail.ResolveExpertDir(poolDir, expertName)
 
 	logData, err := expert.ReadLog(expertDir, taskID)
 	if err != nil {
-		return "", fmt.Errorf("reading expert log: %w", err)
+		// Try shared-state dir — shared expert logs live there
+		sharedDir := filepath.Join(poolDir, "shared-state", expertName)
+		logData, sharedErr := expert.ReadLog(sharedDir, taskID)
+		if sharedErr != nil {
+			return "", fmt.Errorf("reading expert log: %w (also tried shared-state: %v)", err, sharedErr)
+		}
+		result := expert.ExtractResult(logData)
+		return result, nil
 	}
 
 	result := expert.ExtractResult(logData)

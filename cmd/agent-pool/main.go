@@ -484,11 +484,12 @@ func cmdMCP() {
 }
 
 func cmdFlush() {
-	flags := parseFlags(2, "pool", "expert", "task")
+	flags := parseFlags(2, "pool", "expert", "task", "shared")
 
 	poolDir := flags["pool"]
 	expertName := flags["expert"]
 	taskID := flags["task"]
+	isShared := flags["shared"] == "true"
 
 	if poolDir == "" || expertName == "" {
 		fmt.Fprintf(os.Stderr, "usage: agent-pool flush --pool <dir> --expert <name> --task <id>\n")
@@ -499,6 +500,7 @@ func cmdFlush() {
 		PoolDir:    poolDir,
 		ExpertName: expertName,
 		TaskID:     taskID,
+		IsShared:   isShared,
 	}
 
 	if err := hooks.Flush(newStderrLogger(), cfg); err != nil {
