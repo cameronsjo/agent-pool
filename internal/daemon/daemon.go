@@ -992,16 +992,28 @@ func (d *Daemon) Status() map[string]any {
 	sort.Strings(experts)
 
 	counts := make(map[string]int)
+	var activeTasks []map[string]string
 	for _, task := range d.board.Tasks {
 		counts[string(task.Status)]++
+		if task.Status == taskboard.StatusActive {
+			entry := map[string]string{
+				"id":     task.ID,
+				"expert": task.Expert,
+			}
+			if task.StartedAt != nil {
+				entry["started"] = time.Since(*task.StartedAt).Truncate(time.Second).String()
+			}
+			activeTasks = append(activeTasks, entry)
+		}
 	}
 
 	return map[string]any{
-		"pool":        d.cfg.Pool.Name,
-		"state":       "running",
-		"uptime":      time.Since(d.startedAt).Truncate(time.Second).String(),
-		"experts":     experts,
-		"task_counts": counts,
+		"pool":         d.cfg.Pool.Name,
+		"state":        "running",
+		"uptime":       time.Since(d.startedAt).Truncate(time.Second).String(),
+		"experts":      experts,
+		"task_counts":  counts,
+		"active_tasks": activeTasks,
 	}
 }
 

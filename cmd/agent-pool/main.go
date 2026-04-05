@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -161,8 +162,61 @@ func cmdStatus() {
 		os.Exit(1)
 	}
 
-	data, _ := json.MarshalIndent(resp.Data, "", "  ")
-	fmt.Println(string(data))
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(resp.Data, &data); err != nil {
+		// Fallback to raw JSON
+		fmt.Println(string(resp.Data))
+		return
+	}
+
+	printStatusField := func(label, key string) {
+		if v, ok := data[key]; ok {
+			var s string
+			json.Unmarshal(v, &s)
+			fmt.Printf("%-10s %s\n", label+":", s)
+		}
+	}
+
+	printStatusField("Pool", "pool")
+	printStatusField("State", "state")
+	printStatusField("Uptime", "uptime")
+
+	// Experts
+	if v, ok := data["experts"]; ok {
+		var experts []string
+		json.Unmarshal(v, &experts)
+		fmt.Printf("%-10s %s\n", "Experts:", strings.Join(experts, ", "))
+	}
+
+	// Task counts
+	if v, ok := data["task_counts"]; ok {
+		var counts map[string]int
+		json.Unmarshal(v, &counts)
+		if len(counts) > 0 {
+			fmt.Println("\nTasks:")
+			for _, status := range []string{"pending", "blocked", "active", "completed", "failed", "cancelled"} {
+				if n, ok := counts[status]; ok && n > 0 {
+					fmt.Printf("  %-12s %d\n", status+":", n)
+				}
+			}
+		}
+	}
+
+	// Active tasks
+	if v, ok := data["active_tasks"]; ok {
+		var tasks []map[string]string
+		json.Unmarshal(v, &tasks)
+		if len(tasks) > 0 {
+			fmt.Println("\nActive Tasks:")
+			for _, t := range tasks {
+				started := t["started"]
+				if started != "" {
+					started = " (" + started + " ago)"
+				}
+				fmt.Printf("  %-20s %s%s\n", t["id"], t["expert"], started)
+			}
+		}
+	}
 }
 
 // socketResponse mirrors the daemon's response type for CLI deserialization.
