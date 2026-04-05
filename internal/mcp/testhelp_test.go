@@ -1,3 +1,14 @@
+// Shared test helpers for internal/mcp tests.
+//
+// Helpers (not tests — no coverage matrix needed):
+//   makePoolDirs       — create pool directory with subdirectories
+//   buildMCPTestServer — role-aware server builder with init handshake
+//   callTool           — invoke a tool via JSON-RPC (background context)
+//   callToolWithContext — invoke a tool via JSON-RPC (custom context)
+//   resultText         — extract text content from tool result
+//   listToolNames      — list registered tool names
+//   mustJSON           — marshal to JSON or fail
+
 package mcp_test
 
 import (
@@ -36,7 +47,7 @@ func buildMCPTestServer(t *testing.T, poolDir, expertName, role string) *server.
 		ExpertName:   expertName,
 		Role:         role,
 		ApprovalMode: "none",
-		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		Logger:       slog.New(slog.NewJSONHandler(os.Stderr, nil)),
 	}
 	srv := server.NewMCPServer("agent-pool-test", "0.5.0-test")
 	agentmcp.RegisterExpertTools(srv, cfg)
@@ -57,7 +68,21 @@ func buildMCPTestServer(t *testing.T, poolDir, expertName, role string) *server.
 			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
 		},
 	})
-	srv.HandleMessage(context.Background(), initMsg)
+
+	resp := srv.HandleMessage(context.Background(), initMsg)
+	respBytes, _ := json.Marshal(resp)
+	var initResp struct {
+		Error *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(respBytes, &initResp); err != nil {
+		t.Fatalf("unmarshaling init response: %v", err)
+	}
+	if initResp.Error != nil {
+		t.Fatalf("MCP init failed: %d %s", initResp.Error.Code, initResp.Error.Message)
+	}
 
 	return srv
 }
@@ -154,16 +179,24 @@ func listToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
 
 	var rpcResp struct {
 		Result *mcp.ListToolsResult `json:"result"`
+		Error  *struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
 	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
 		t.Fatalf("unmarshaling list response: %v", err)
 	}
+	if rpcResp.Error != nil {
+		t.Fatalf("tools/list error: %d %s", rpcResp.Error.Code, rpcResp.Error.Message)
+	}
+	if rpcResp.Result == nil {
+		t.Fatal("nil result from tools/list")
+	}
 
 	names := make(map[string]bool)
-	if rpcResp.Result != nil {
-		for _, tool := range rpcResp.Result.Tools {
-			names[tool.Name] = true
-		}
+	for _, tool := range rpcResp.Result.Tools {
+		names[tool.Name] = true
 	}
 	return names
 }
