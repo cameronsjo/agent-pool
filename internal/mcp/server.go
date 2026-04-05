@@ -16,11 +16,13 @@ import (
 
 // ServerConfig holds the parameters for the MCP server instance.
 type ServerConfig struct {
-	PoolDir      string
-	ExpertName   string // for experts: "auth"; for architect: "architect"
-	Role         string // "expert" (default) or "architect"
-	ApprovalMode string // architect only: "none", "decomposition", "all"
-	Logger       *slog.Logger
+	PoolDir         string
+	ExpertName      string // for experts: "auth"; for architect: "architect"
+	Role            string // "expert" (default) or "architect"
+	ApprovalMode    string // architect only: "none", "decomposition", "all"
+	IsShared        bool   // true for shared experts (user-level identity + pool overlay)
+	SharedOverlayDir string // pool-scoped overlay dir for shared experts
+	Logger          *slog.Logger
 }
 
 // Validate checks that required fields are set.

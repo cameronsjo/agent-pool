@@ -597,6 +597,8 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	var mcpErr error
 	if mail.IsBuiltinRole(expertName) {
 		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigForRole(d.poolDir, expertName)
+	} else if d.isSharedExpert(expertName) {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigShared(d.poolDir, expertName)
 	} else {
 		mcpConfigPath, mcpErr = agentmcp.WriteTempConfig(d.poolDir, expertName)
 	}

@@ -43,6 +43,14 @@ func WriteTempConfigForRole(poolDir, role string) (string, error) {
 	return writeTempConfigWithArgs([]string{"mcp", "--pool", poolDir, "--role", role})
 }
 
+// WriteTempConfigShared writes an MCP config JSON file for a shared expert session.
+// Includes --shared true so the MCP server knows the expert is shared.
+func WriteTempConfigShared(poolDir, expertName string) (string, error) {
+	return writeTempConfigWithArgs([]string{
+		"mcp", "--pool", poolDir, "--expert", expertName, "--shared", "true",
+	})
+}
+
 // writeTempConfigWithArgs creates a temp MCP config JSON file pointing claude
 // at the current agent-pool binary with the given args.
 func writeTempConfigWithArgs(args []string) (string, error) {
