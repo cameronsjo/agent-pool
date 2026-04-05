@@ -8,7 +8,6 @@ package daemon
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"log/slog"
 	"os"
@@ -1078,20 +1077,13 @@ func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
 }
 
 // resolveSockPath returns the unix socket path for CLI→daemon communication.
-// Uses the override if set, otherwise defaults to {poolDir}/daemon.sock.
-// Falls back to a hashed path under os.TempDir() when the default would exceed
-// the macOS Unix socket path limit (104 bytes).
+// Uses the override if set, otherwise delegates to config.ResolveSockPath
+// (shared with the CLI to ensure both sides agree on the path).
 func (d *Daemon) resolveSockPath() string {
 	if d.sockPathOver != "" {
 		return d.sockPathOver
 	}
-	candidate := filepath.Join(d.poolDir, "daemon.sock")
-	if len(candidate) <= 100 {
-		return candidate
-	}
-	h := fnv.New32a()
-	h.Write([]byte(d.poolDir))
-	return filepath.Join(os.TempDir(), fmt.Sprintf("ap-%x.sock", h.Sum32()))
+	return config.ResolveSockPath(d.poolDir)
 }
 
 // resolveExpertDir returns the state directory for an expert or built-in role.

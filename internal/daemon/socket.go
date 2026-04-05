@@ -171,7 +171,9 @@ func (s *socketServer) handleSubscribe(ctx context.Context, conn net.Conn) {
 // writeResponse encodes a response as a single JSON line.
 func (s *socketServer) writeResponse(conn net.Conn, resp socketResponse) {
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	json.NewEncoder(conn).Encode(resp)
+	if err := json.NewEncoder(conn).Encode(resp); err != nil {
+		s.logger.Debug("Failed to write socket response", "error", err)
+	}
 }
 
 // close shuts down the listener and removes the socket file.

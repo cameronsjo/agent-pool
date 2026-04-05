@@ -510,7 +510,8 @@ func handleListExperts(cfg *ServerConfig) server.ToolHandlerFunc {
 		sort.Strings(poolExperts)
 
 		result := map[string][]string{
-			"experts": poolExperts,
+			"experts":        poolExperts,
+			"pool_experts":   poolExperts, // compatibility alias (deprecated)
 			"shared_experts": poolCfg.Shared.Include,
 		}
 

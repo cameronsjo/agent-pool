@@ -76,15 +76,15 @@ func TestEventBus_SlowDrops(t *testing.T) {
 
 	_, ch := bus.Subscribe()
 
-	// Fill the buffer (capacity 64) plus extra
-	for i := 0; i < 80; i++ {
+	// Fill the buffer plus extra
+	for i := 0; i < daemon.EventBufSize+16; i++ {
 		bus.Emit(daemon.Event{
 			Type:      daemon.EventExpertSpawning,
 			Timestamp: time.Now(),
 		})
 	}
 
-	// Should have 64 events (buffer capacity), not 80
+	// Should have exactly buffer capacity events
 	count := 0
 	for {
 		select {
@@ -95,7 +95,7 @@ func TestEventBus_SlowDrops(t *testing.T) {
 		}
 	}
 done:
-	if count != 64 {
-		t.Errorf("received %d events, want 64 (buffer capacity)", count)
+	if count != daemon.EventBufSize {
+		t.Errorf("received %d events, want %d (buffer capacity)", count, daemon.EventBufSize)
 	}
 }

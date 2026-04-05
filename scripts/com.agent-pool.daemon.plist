@@ -26,5 +26,8 @@
 
 	<key>WorkingDirectory</key>
 	<string>POOL_DIR</string>
+
+	<key>ExitTimeOut</key>
+	<integer>35</integer>
 </dict>
 </plist>

@@ -63,6 +63,10 @@ type TaskUnblockedData struct {
 	Expert string `json:"expert"`
 }
 
+// EventBufSize is the subscriber channel buffer capacity. Subscribers that
+// can't keep up will miss events once the buffer fills (non-blocking emit).
+const EventBufSize = 64
+
 // eventBus fans out events to registered subscribers.
 type eventBus struct {
 	mu     sync.RWMutex
@@ -84,7 +88,7 @@ func (b *eventBus) subscribe() (int, <-chan Event) {
 	id := b.nextID
 	b.nextID++
 
-	ch := make(chan Event, 64)
+	ch := make(chan Event, EventBufSize)
 	b.subs[id] = ch
 	return id, ch
 }

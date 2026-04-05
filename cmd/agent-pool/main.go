@@ -127,7 +127,7 @@ func cmdStop() {
 		os.Exit(1)
 	}
 
-	resp, err := connectAndSend(filepath.Join(poolDir, "daemon.sock"), "stop")
+	resp, err := connectAndSend(config.ResolveSockPath(poolDir), "stop")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -153,7 +153,7 @@ func cmdStatus() {
 		os.Exit(1)
 	}
 
-	resp, err := connectAndSend(filepath.Join(poolDir, "daemon.sock"), "status")
+	resp, err := connectAndSend(config.ResolveSockPath(poolDir), "status")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -233,7 +233,7 @@ func cmdWatch() {
 		os.Exit(1)
 	}
 
-	sockPath := filepath.Join(poolDir, "daemon.sock")
+	sockPath := config.ResolveSockPath(poolDir)
 	conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: connecting to daemon (is it running?): %v\n", err)
