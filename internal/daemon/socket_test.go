@@ -6,16 +6,26 @@
 //   - TestSocket_StaleCleanup: stale socket file doesn't block start
 //   - TestSocket_RemovedOnShutdown: file cleaned up after exit
 //   - TestSocket_Status: verify status response has pool name and experts
+//
+// Graceful drain:
+//   - TestDaemon_DrainWaits: gated spawn blocks, cancel context, verify daemon
+//     waits for in-flight work before exiting
 package daemon_test
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/cameronsjo/agent-pool/internal/daemon"
+	"github.com/cameronsjo/agent-pool/internal/expert"
 )
 
 // shortTempDir creates a temp directory with a short path, avoiding macOS Unix
@@ -233,4 +243,97 @@ project_dir = "PROJECT_DIR"
 	}
 
 	shutdownDaemon(t, cancel, errCh)
+}
+
+// slowSpawner blocks on a channel regardless of context cancellation.
+// This tests that the drain waits for in-flight work even when the spawn
+// doesn't respond to context cancellation immediately (simulating a real
+// claude process that takes time to clean up).
+type slowSpawner struct {
+	mu       sync.Mutex
+	attempts int
+	blocker  chan struct{}
+}
+
+func (s *slowSpawner) Spawn(_ context.Context, _ *slog.Logger, cfg *expert.SpawnConfig) (*expert.Result, error) {
+	s.mu.Lock()
+	s.attempts++
+	s.mu.Unlock()
+
+	<-s.blocker // blocks until closed, ignores context
+
+	return &expert.Result{
+		TaskID:   cfg.TaskMessage.ID,
+		ExitCode: 0,
+		Output:   []byte(`{"type":"result","result":"done"}`),
+		Summary:  "Task completed",
+		Duration: 100 * time.Millisecond,
+	}, nil
+}
+
+func (s *slowSpawner) getAttempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempts
+}
+
+func TestDaemon_DrainWaits(t *testing.T) {
+	poolDir := shortTempDir(t)
+
+	cfg := writePoolConfig(t, poolDir, `[pool]
+name = "drain-test"
+project_dir = "PROJECT_DIR"
+
+[experts.auth]
+`)
+
+	blocker := make(chan struct{})
+	spawner := &slowSpawner{blocker: blocker}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger,
+		daemon.WithSpawner(spawner),
+		daemon.WithDrainTimeout(5*time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Send a task that will block in the spawner
+	writeMessage(t, filepath.Join(poolDir, "postoffice"),
+		"task-drain-001", "architect", "auth")
+
+	// Wait for the spawn to be attempted
+	deadline := time.Now().Add(3 * time.Second)
+	for spawner.getAttempts() == 0 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if spawner.getAttempts() == 0 {
+		t.Fatal("spawn was never attempted")
+	}
+
+	// Cancel context — daemon should start drain but wait for in-flight spawn
+	cancel()
+
+	// Daemon should NOT have exited yet (spawn is still blocked)
+	select {
+	case <-errCh:
+		t.Fatal("daemon exited before in-flight work completed")
+	case <-time.After(300 * time.Millisecond):
+		// Good — daemon is waiting for drain
+	}
+
+	// Release the blocker — daemon should now complete
+	close(blocker)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("daemon returned error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("daemon did not exit after drain completed")
+	}
 }

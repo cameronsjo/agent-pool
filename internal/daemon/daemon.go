@@ -52,6 +52,8 @@ type Daemon struct {
 	boardPath string
 	draining  map[string]bool // re-entrancy guard for expert inbox drains
 
+	wg           sync.WaitGroup
+	drainTimeout time.Duration // max wait for in-flight goroutines on shutdown (default 30s)
 	startedAt    time.Time
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 }
@@ -80,6 +82,12 @@ func WithSocketPath(path string) Option {
 	return func(d *Daemon) { d.sockPathOver = path }
 }
 
+// WithDrainTimeout sets the max wait for in-flight goroutines during shutdown.
+// Default is 30 seconds. Use a shorter value in tests.
+func WithDrainTimeout(d time.Duration) Option {
+	return func(dm *Daemon) { dm.drainTimeout = d }
+}
+
 // New creates a Daemon for the given pool.
 func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Option) *Daemon {
 	boardPath := filepath.Join(poolDir, "taskboard.json")
@@ -94,13 +102,14 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 	}
 
 	d := &Daemon{
-		cfg:       cfg,
-		poolDir:   poolDir,
-		logger:    logger,
-		board:     board,
-		boardPath: boardPath,
-		draining:  make(map[string]bool),
-		spawner:   defaultSpawner{},
+		cfg:          cfg,
+		poolDir:      poolDir,
+		logger:       logger,
+		board:        board,
+		boardPath:    boardPath,
+		draining:     make(map[string]bool),
+		spawner:      defaultSpawner{},
+		drainTimeout: 30 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -179,9 +188,18 @@ func (d *Daemon) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-childCtx.Done():
-			d.logger.Info("Shutting down daemon",
+			d.logger.Info("Shutting down daemon, draining in-flight work",
 				"pool", d.cfg.Pool.Name,
+				"drain_timeout", d.drainTimeout,
 			)
+			done := make(chan struct{})
+			go func() { d.wg.Wait(); close(done) }()
+			select {
+			case <-done:
+				d.logger.Info("All in-flight work completed")
+			case <-time.After(d.drainTimeout):
+				d.logger.Warn("Drain timeout exceeded, forcing shutdown")
+			}
 			return nil
 
 		case event, ok := <-watcher.Events():
@@ -192,7 +210,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if event.Dir == postofficeDir {
 				d.handlePostoffice(childCtx, event.Path)
 			} else if event.Dir == approvalsDir {
-				go d.handleApprovalRequest(childCtx, event.Path)
+				d.wg.Add(1)
+				go func() { defer d.wg.Done(); d.handleApprovalRequest(childCtx, event.Path) }()
 			} else {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
@@ -201,7 +220,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 					// block postoffice routing or other experts.
 					// The busy flag inside handleInbox prevents
 					// concurrent spawns for the same expert.
-					go d.handleInbox(childCtx, expertName, event.Path)
+					d.wg.Add(1)
+					go func() { defer d.wg.Done(); d.handleInbox(childCtx, expertName, event.Path) }()
 				} else {
 					d.logger.Warn("Received event for unknown inbox",
 						"dir", event.Dir,
@@ -726,7 +746,8 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 
 	// Wake experts outside the lock — handleInbox acquires its own lock
 	for _, expert := range expertsToWake {
-		go d.handleInbox(ctx, expert, "")
+		d.wg.Add(1)
+		go func(e string) { defer d.wg.Done(); d.handleInbox(ctx, e, "") }(expert)
 	}
 }
 
@@ -751,10 +772,12 @@ func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
 // when the daemon starts. Each drains in its own goroutine via handleInbox.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
 	// Drain architect inbox
-	go d.handleInbox(ctx, "architect", "")
+	d.wg.Add(1)
+	go func() { defer d.wg.Done(); d.handleInbox(ctx, "architect", "") }()
 
 	for name := range d.cfg.Experts {
-		go d.handleInbox(ctx, name, "")
+		d.wg.Add(1)
+		go func(n string) { defer d.wg.Done(); d.handleInbox(ctx, n, "") }(name)
 	}
 }
 

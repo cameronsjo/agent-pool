@@ -94,6 +94,17 @@ func cmdStart() {
 		syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	// Double-signal: first signal triggers graceful drain, second forces exit.
+	go func() {
+		<-ctx.Done()
+		stop() // reset signal handling to default
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		<-sigCh
+		logger.Warn("Received second signal, forcing immediate exit")
+		os.Exit(1)
+	}()
+
 	d := daemon.New(cfg, poolDir, logger)
 	if err := d.Run(ctx); err != nil {
 		logger.Error("Daemon failed", "error", err)
