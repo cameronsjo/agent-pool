@@ -27,7 +27,7 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 	store := contract.NewStore(cfg.PoolDir).WithLogger(cfg.Logger)
 
 	srv.AddTool(
-		mcp.NewTool("pool_define_contract",
+		mcp.NewTool("define_contract",
 			mcp.WithDescription("Define a new contract between experts. Creates a versioned interface specification."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Contract ID (must be filename-safe)")),
 			mcp.WithString("between", mcp.Required(), mcp.Description("Comma-separated list of expert names (at least 2)")),
@@ -37,7 +37,7 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_send_task",
+		mcp.NewTool("send_task",
 			mcp.WithDescription("Delegate a task to an expert via the postoffice. References contracts the expert must follow."),
 			mcp.WithString("to", mcp.Required(), mcp.Description("Recipient expert name")),
 			mcp.WithString("body", mcp.Required(), mcp.Description("Task description (markdown)")),
@@ -50,7 +50,7 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_verify_result",
+		mcp.NewTool("verify_result",
 			mcp.WithDescription("Log a verification result for a task against a contract specification."),
 			mcp.WithString("task_id", mcp.Required(), mcp.Description("Task ID being verified")),
 			mcp.WithString("contract_id", mcp.Required(), mcp.Description("Contract ID verified against")),
@@ -61,7 +61,7 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_amend_contract",
+		mcp.NewTool("amend_contract",
 			mcp.WithDescription("Amend an existing contract. Increments version and notifies all parties."),
 			mcp.WithString("id", mcp.Required(), mcp.Description("Contract ID to amend")),
 			mcp.WithString("body", mcp.Required(), mcp.Description("New contract body (markdown)")),

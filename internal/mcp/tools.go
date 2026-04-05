@@ -23,7 +23,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
 
 	srv.AddTool(
-		mcp.NewTool("pool_read_state",
+		mcp.NewTool("read_state",
 			mcp.WithDescription("Read current expert state files (identity.md, state.md, errors.md)"),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 		),
@@ -31,7 +31,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_update_state",
+		mcp.NewTool("update_state",
 			mcp.WithDescription("Update the expert's working memory (state.md). Content must be non-empty and under 50KB."),
 			mcp.WithString("content", mcp.Required(), mcp.Description("New state.md content")),
 		),
@@ -39,7 +39,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_append_error",
+		mcp.NewTool("append_error",
 			mcp.WithDescription("Append a structured error entry to the expert's error log (errors.md). Each entry is timestamped."),
 			mcp.WithString("entry", mcp.Required(), mcp.Description("Error description to append")),
 		),
@@ -47,7 +47,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_send_response",
+		mcp.NewTool("send_response",
 			mcp.WithDescription("Send a response message to another agent via the postoffice."),
 			mcp.WithString("to", mcp.Required(), mcp.Description("Recipient agent name")),
 			mcp.WithString("body", mcp.Required(), mcp.Description("Response body (markdown)")),
@@ -57,7 +57,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_recall",
+		mcp.NewTool("recall",
 			mcp.WithDescription("Read a prior task log by its task ID."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 			mcp.WithString("task_id", mcp.Required(), mcp.Description("Task ID to recall")),
@@ -66,7 +66,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_search_index",
+		mcp.NewTool("search_index",
 			mcp.WithDescription("Search the task log index for relevant prior tasks. Case-insensitive substring match."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Search query")),

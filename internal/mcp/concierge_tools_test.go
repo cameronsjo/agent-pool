@@ -3,26 +3,26 @@
 // RegisterConciergeTools (Classification: INTEGRATION)
 //   [x] Happy: all 4 concierge tools + 6 expert tools registered (TestConciergeTools_Registration)
 //
-// pool_ask_expert (Classification: FILESYSTEM I/O + CONCURRENCY)
+//ask_expert (Classification: FILESYSTEM I/O + CONCURRENCY)
 //   [x] Happy: question dispatched, polls taskboard, returns result (TestAskExpert_Happy)
 //   [x] Error: missing params (TestAskExpert_MissingParams)
 //   [x] Error: expert task fails (TestAskExpert_ExpertFails)
 //   [x] Error: task cancelled with note (TestAskExpert_TaskCancelled)
 //   [x] Error: context timeout (TestAskExpert_Timeout)
 //
-// pool_submit_plan (Classification: FILESYSTEM I/O)
+//submit_plan (Classification: FILESYSTEM I/O)
 //   [x] Happy: plan message in postoffice, returns task ID (TestSubmitPlan_Happy)
 //   [x] Happy: plan with contracts (TestSubmitPlan_WithContracts)
 //   [x] Error: missing plan param (TestSubmitPlan_MissingPlan)
 //
-// pool_check_status (Classification: FILESYSTEM I/O)
+//check_status (Classification: FILESYSTEM I/O)
 //   [x] Happy: single task lookup (TestCheckStatus_SingleTask)
 //   [x] Happy: filter by expert (TestCheckStatus_FilterByExpert)
 //   [x] Happy: filter by status (TestCheckStatus_FilterByStatus)
 //   [x] Happy: default excludes terminal (TestCheckStatus_DefaultExcludesTerminal)
 //   [x] Error: task not found (TestCheckStatus_NotFound)
 //
-// pool_list_experts (Classification: FILESYSTEM I/O)
+//list_experts (Classification: FILESYSTEM I/O)
 //   [x] Happy: lists pool and shared experts (TestListExperts_Happy)
 //   [x] Error: missing pool.toml (TestListExperts_MissingConfig)
 
@@ -78,12 +78,12 @@ func TestConciergeTools_Registration(t *testing.T) {
 
 	expected := []string{
 		// Concierge tools
-		"pool_ask_expert", "pool_submit_plan",
-		"pool_check_status", "pool_list_experts",
+		"ask_expert", "submit_plan",
+		"check_status", "list_experts",
 		// Expert tools (inherited)
-		"pool_read_state", "pool_update_state",
-		"pool_append_error", "pool_send_response",
-		"pool_recall", "pool_search_index",
+		"read_state", "update_state",
+		"append_error", "send_response",
+		"recall", "search_index",
 	}
 	for _, name := range expected {
 		if !tools[name] {
@@ -92,7 +92,7 @@ func TestConciergeTools_Registration(t *testing.T) {
 	}
 
 	// Should NOT have architect tools
-	architectOnly := []string{"pool_define_contract", "pool_send_task", "pool_verify_result", "pool_amend_contract"}
+	architectOnly := []string{"define_contract", "send_task", "verify_result", "amend_contract"}
 	for _, name := range architectOnly {
 		if tools[name] {
 			t.Errorf("unexpected architect tool registered for concierge: %s", name)
@@ -156,7 +156,7 @@ func TestAskExpert_Happy(t *testing.T) {
 		board.Save(filepath.Join(poolDir, "taskboard.json"))
 	}()
 
-	result := callTool(t, srv, "pool_ask_expert", map[string]any{
+	result := callTool(t, srv, "ask_expert", map[string]any{
 		"expert":   "auth",
 		"question": "How does token refresh work?",
 	})
@@ -178,7 +178,7 @@ func TestAskExpert_MissingParams(t *testing.T) {
 	srv := buildConciergeTestServer(t, poolDir)
 
 	t.Run("missing_expert", func(t *testing.T) {
-		result := callTool(t, srv, "pool_ask_expert", map[string]any{
+		result := callTool(t, srv, "ask_expert", map[string]any{
 			"question": "How does auth work?",
 		})
 		if !result.IsError {
@@ -187,7 +187,7 @@ func TestAskExpert_MissingParams(t *testing.T) {
 	})
 
 	t.Run("missing_question", func(t *testing.T) {
-		result := callTool(t, srv, "pool_ask_expert", map[string]any{
+		result := callTool(t, srv, "ask_expert", map[string]any{
 			"expert": "auth",
 		})
 		if !result.IsError {
@@ -240,7 +240,7 @@ func TestAskExpert_ExpertFails(t *testing.T) {
 		board.Save(filepath.Join(poolDir, "taskboard.json"))
 	}()
 
-	result := callTool(t, srv, "pool_ask_expert", map[string]any{
+	result := callTool(t, srv, "ask_expert", map[string]any{
 		"expert":   "auth",
 		"question": "How does auth work?",
 	})
@@ -297,7 +297,7 @@ func TestAskExpert_TaskCancelled(t *testing.T) {
 		board.Save(filepath.Join(poolDir, "taskboard.json"))
 	}()
 
-	result := callTool(t, srv, "pool_ask_expert", map[string]any{
+	result := callTool(t, srv, "ask_expert", map[string]any{
 		"expert":   "auth",
 		"question": "How does auth work?",
 	})
@@ -323,7 +323,7 @@ func TestAskExpert_Timeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
-	result := callToolWithContext(t, ctx, srv, "pool_ask_expert", map[string]any{
+	result := callToolWithContext(t, ctx, srv, "ask_expert", map[string]any{
 		"expert":   "auth",
 		"question": "This will time out",
 	})
@@ -343,7 +343,7 @@ func TestSubmitPlan_Happy(t *testing.T) {
 	poolDir := setupConciergePool(t)
 	srv := buildConciergeTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_submit_plan", map[string]any{
+	result := callTool(t, srv, "submit_plan", map[string]any{
 		"plan": "## OAuth Login Flow\n\nImplement Google OAuth with PKCE.",
 	})
 
@@ -380,7 +380,7 @@ func TestSubmitPlan_WithContracts(t *testing.T) {
 	poolDir := setupConciergePool(t)
 	srv := buildConciergeTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_submit_plan", map[string]any{
+	result := callTool(t, srv, "submit_plan", map[string]any{
 		"plan":      "Implement the auth flow",
 		"contracts": "auth-api-v1, session-store-v2",
 	})
@@ -412,7 +412,7 @@ func TestSubmitPlan_MissingPlan(t *testing.T) {
 	poolDir := setupConciergePool(t)
 	srv := buildConciergeTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_submit_plan", map[string]any{})
+	result := callTool(t, srv, "submit_plan", map[string]any{})
 	if !result.IsError {
 		t.Error("expected error for missing plan")
 	}
@@ -443,7 +443,7 @@ func TestCheckStatus_SingleTask(t *testing.T) {
 		},
 	})
 
-	result := callTool(t, srv, "pool_check_status", map[string]any{
+	result := callTool(t, srv, "check_status", map[string]any{
 		"task_id": "task-001",
 	})
 
@@ -467,7 +467,7 @@ func TestCheckStatus_FilterByExpert(t *testing.T) {
 		"task-003": {ID: "task-003", Status: taskboard.StatusPending, Expert: "auth", CreatedAt: now},
 	})
 
-	result := callTool(t, srv, "pool_check_status", map[string]any{
+	result := callTool(t, srv, "check_status", map[string]any{
 		"expert": "auth",
 	})
 
@@ -493,7 +493,7 @@ func TestCheckStatus_FilterByStatus(t *testing.T) {
 		"task-002": {ID: "task-002", Status: taskboard.StatusCompleted, Expert: "auth", CreatedAt: now},
 	})
 
-	result := callTool(t, srv, "pool_check_status", map[string]any{
+	result := callTool(t, srv, "check_status", map[string]any{
 		"status": "completed",
 	})
 
@@ -517,7 +517,7 @@ func TestCheckStatus_DefaultExcludesTerminal(t *testing.T) {
 		"task-003": {ID: "task-003", Status: taskboard.StatusFailed, Expert: "frontend", CreatedAt: now},
 	})
 
-	result := callTool(t, srv, "pool_check_status", map[string]any{})
+	result := callTool(t, srv, "check_status", map[string]any{})
 
 	text := resultText(t, result)
 	if !strings.Contains(text, "task-001") {
@@ -537,7 +537,7 @@ func TestCheckStatus_NotFound(t *testing.T) {
 
 	setupTaskboard(t, poolDir, map[string]*taskboard.Task{})
 
-	result := callTool(t, srv, "pool_check_status", map[string]any{
+	result := callTool(t, srv, "check_status", map[string]any{
 		"task_id": "nonexistent",
 	})
 	if !result.IsError {
@@ -569,7 +569,7 @@ model = "sonnet"
 		t.Fatalf("writing pool.toml: %v", err)
 	}
 
-	result := callTool(t, srv, "pool_list_experts", map[string]any{})
+	result := callTool(t, srv, "list_experts", map[string]any{})
 
 	text := resultText(t, result)
 
@@ -578,13 +578,13 @@ model = "sonnet"
 		t.Fatalf("parsing result JSON: %v", err)
 	}
 
-	poolExperts := parsed["pool_experts"]
+	poolExperts := parsed["experts"]
 	if len(poolExperts) != 2 {
-		t.Fatalf("pool_experts count = %d, want 2", len(poolExperts))
+		t.Fatalf("experts count = %d, want 2", len(poolExperts))
 	}
 	// Sorted alphabetically
 	if poolExperts[0] != "auth" || poolExperts[1] != "frontend" {
-		t.Errorf("pool_experts = %v, want [auth, frontend]", poolExperts)
+		t.Errorf("experts = %v, want [auth, frontend]", poolExperts)
 	}
 
 	shared := parsed["shared_experts"]
@@ -598,7 +598,7 @@ func TestListExperts_MissingConfig(t *testing.T) {
 	srv := buildConciergeTestServer(t, poolDir)
 
 	// No pool.toml written — LoadPool should fail
-	result := callTool(t, srv, "pool_list_experts", map[string]any{})
+	result := callTool(t, srv, "list_experts", map[string]any{})
 	if !result.IsError {
 		t.Error("expected error for missing pool.toml")
 	}

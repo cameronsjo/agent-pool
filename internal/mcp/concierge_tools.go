@@ -32,8 +32,8 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	}
 
 	srv.AddTool(
-		mcp.NewTool("pool_ask_expert",
-			mcp.WithDescription("Send a question to an expert and wait for the response. BLOCKS until the expert completes or times out. For non-blocking dispatch, use pool_dispatch instead."),
+		mcp.NewTool("ask_expert",
+			mcp.WithDescription("Send a question to an expert and wait for the response. BLOCKS until the expert completes or times out. For non-blocking dispatch, use dispatch instead."),
 			mcp.WithString("expert", mcp.Required(), mcp.Description("Expert name to ask (e.g., 'auth', 'frontend')")),
 			mcp.WithString("question", mcp.Required(), mcp.Description("Question body (markdown)")),
 		),
@@ -41,8 +41,8 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_dispatch",
-			mcp.WithDescription("Send a question or task to an expert without waiting. Returns a task ID immediately. Use pool_collect to retrieve results later."),
+		mcp.NewTool("dispatch",
+			mcp.WithDescription("Send a question or task to an expert without waiting. Returns a task ID immediately. Use collect to retrieve results later."),
 			mcp.WithString("expert", mcp.Required(), mcp.Description("Expert name (e.g., 'auth', 'frontend')")),
 			mcp.WithString("message", mcp.Required(), mcp.Description("Question or task body (markdown)")),
 			mcp.WithString("type", mcp.Description("Message type: 'question' (default) or 'task'")),
@@ -51,7 +51,7 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_collect",
+		mcp.NewTool("collect",
 			mcp.WithDescription("Check dispatched tasks and return results for any that have completed. Non-blocking — returns immediately with current status."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 			mcp.WithString("task_ids", mcp.Required(), mcp.Description("Comma-separated task IDs to check")),
@@ -60,8 +60,8 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_submit_plan",
-			mcp.WithDescription("Submit a plan to the architect for review and decomposition. Returns immediately with task ID — use pool_check_status to track."),
+		mcp.NewTool("submit_plan",
+			mcp.WithDescription("Submit a plan to the architect for review and decomposition. Returns immediately with task ID — use check_status to track."),
 			mcp.WithString("plan", mcp.Required(), mcp.Description("Plan body (markdown)")),
 			mcp.WithString("contracts", mcp.Description("Comma-separated contract IDs to reference (optional)")),
 		),
@@ -69,7 +69,7 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_check_status",
+		mcp.NewTool("check_status",
 			mcp.WithDescription("Query the taskboard for task status. Returns all non-terminal tasks if no filters given."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 			mcp.WithString("task_id", mcp.Description("Specific task ID to look up (optional)")),
@@ -80,7 +80,7 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 
 	srv.AddTool(
-		mcp.NewTool("pool_list_experts",
+		mcp.NewTool("list_experts",
 			mcp.WithDescription("List available experts in the pool (pool-scoped and shared)."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 		),
@@ -209,7 +209,7 @@ func handleDispatch(cfg *ServerConfig) server.ToolHandlerFunc {
 	}
 }
 
-// collectResult represents one task's status in a pool_collect response.
+// collectResult represents one task's status in a collect response.
 type collectResult struct {
 	ID       string  `json:"id"`
 	Expert   string  `json:"expert"`
@@ -510,7 +510,7 @@ func handleListExperts(cfg *ServerConfig) server.ToolHandlerFunc {
 		sort.Strings(poolExperts)
 
 		result := map[string][]string{
-			"pool_experts":   poolExperts,
+			"experts": poolExperts,
 			"shared_experts": poolCfg.Shared.Include,
 		}
 

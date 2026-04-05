@@ -18,7 +18,7 @@ Identify which domains are involved.
 
 ### 2. Gather expert input (optional)
 
-If the feature spans multiple domains, use `pool_ask_expert` to get domain
+If the feature spans multiple domains, use `ask_expert` to get domain
 input from relevant experts. This is the same read-path flow as pool-ask
 but focused on gathering implementation considerations.
 
@@ -33,7 +33,7 @@ Synthesize the user's requirements and expert input into a plan that includes:
 
 ### 4. Submit to architect
 
-Call `pool_submit_plan` with:
+Call `submit_plan` with:
 - `plan`: the plan body (markdown)
 - `contracts`: any existing contract IDs that apply (optional)
 
@@ -42,7 +42,7 @@ and dispatch tasks to experts.
 
 ### 5. Track progress
 
-Use `pool_check_status` to monitor:
+Use `check_status` to monitor:
 - The plan task itself (is the architect working on it?)
 - Sub-tasks dispatched by the architect
 - Any blocked or failed tasks

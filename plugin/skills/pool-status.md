@@ -11,7 +11,7 @@ You are the concierge. The user wants to know the status of in-flight work.
 
 ### 1. Query the taskboard
 
-Call `pool_check_status` with appropriate filters:
+Call `check_status` with appropriate filters:
 - No filters: shows all active (non-terminal) tasks
 - `task_id`: look up a specific task
 - `expert`: show all tasks for one expert

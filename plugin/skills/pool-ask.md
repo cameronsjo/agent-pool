@@ -13,12 +13,12 @@ responses, and synthesize a unified answer.
 
 ### 1. Discover experts
 
-Call `pool_list_experts` to see who's available. Present the list to the user
+Call `list_experts` to see who's available. Present the list to the user
 if they haven't specified which experts to ask.
 
 ### 2. Dispatch questions
 
-For each relevant expert, call `pool_ask_expert` with:
+For each relevant expert, call `ask_expert` with:
 - `expert`: the expert's name
 - `question`: the question, tailored to that expert's domain
 
