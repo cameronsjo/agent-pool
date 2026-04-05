@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -93,16 +94,16 @@ func cmdStart() {
 
 	logger.Info("Logging to file", "path", logPath)
 
-	ctx, stop := signal.NotifyContext(context.Background(),
-		syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(sigCh)
+	defer cancel()
 
 	// Double-signal: first signal triggers graceful drain, second forces exit.
 	go func() {
-		<-ctx.Done()
-		stop() // reset signal handling to default
-		sigCh := make(chan os.Signal, 1)
-		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		<-sigCh
+		cancel()
 		<-sigCh
 		logger.Warn("Received second signal, forcing immediate exit")
 		os.Exit(1)
@@ -270,11 +271,13 @@ func cmdWatch() {
 	// Clear deadline for streaming
 	conn.SetDeadline(time.Time{})
 
-	// Handle Ctrl-C cleanly
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	// Handle Ctrl-C cleanly — set flag so scanner error is suppressed
+	var stopping atomic.Bool
+	watchSigCh := make(chan os.Signal, 1)
+	signal.Notify(watchSigCh, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		<-sigCh
+		<-watchSigCh
+		stopping.Store(true)
 		conn.Close()
 	}()
 
@@ -377,7 +380,7 @@ func cmdWatch() {
 		fmt.Printf("[%s] %s%-18s%s %s\n", ts, color, e.Type, reset, detail)
 	}
 
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && !stopping.Load() {
 		fmt.Fprintf(os.Stderr, "error: stream interrupted: %v\n", err)
 		os.Exit(1)
 	}
