@@ -129,6 +129,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
+		"--verbose",
 		"--model", cfg.Model,
 	}
 
