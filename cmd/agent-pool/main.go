@@ -43,28 +43,26 @@ func main() {
 }
 
 func cmdStart() {
-	poolDir := ""
+	explicit := ""
 	if len(os.Args) > 2 {
-		poolDir = os.Args[2]
+		explicit = os.Args[2]
+	}
+
+	poolDir, err := config.DiscoverPoolDir(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	poolDir, err = filepath.Abs(poolDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error resolving pool directory: %v\n", err)
+		os.Exit(1)
 	}
 
 	cfg, err := config.LoadPool(poolDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error loading pool config: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Resolve poolDir to absolute path for consistent path handling
-	if poolDir == "" {
-		poolDir, err = os.Getwd()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error getting current directory: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	poolDir, err = filepath.Abs(poolDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error resolving pool directory: %v\n", err)
 		os.Exit(1)
 	}
 

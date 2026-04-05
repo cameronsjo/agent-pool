@@ -75,6 +75,46 @@ type ExpertSection struct {
 	AllowedTools []string `toml:"allowed_tools"`
 }
 
+// DiscoverPoolDir finds the pool directory by checking:
+//  1. The given path (if non-empty)
+//  2. Current directory for pool.toml
+//  3. .agent-pool/ subdirectory of current directory
+//  4. Walk parent directories looking for .agent-pool/
+//
+// Returns the absolute path to the directory containing pool.toml.
+func DiscoverPoolDir(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("getting working directory: %w", err)
+	}
+
+	// Check cwd directly (pool.toml in current dir)
+	if _, err := os.Stat(filepath.Join(cwd, "pool.toml")); err == nil {
+		return cwd, nil
+	}
+
+	// Walk up looking for .agent-pool/pool.toml
+	dir := cwd
+	for {
+		candidate := filepath.Join(dir, ".agent-pool")
+		if _, err := os.Stat(filepath.Join(candidate, "pool.toml")); err == nil {
+			return candidate, nil
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break // reached filesystem root
+		}
+		dir = parent
+	}
+
+	return "", fmt.Errorf("no pool found (looked for pool.toml and .agent-pool/ from %s to /)", cwd)
+}
+
 // LoadPool reads and parses a pool.toml from the given directory.
 // If poolDir is empty, it uses the current working directory.
 func LoadPool(poolDir string) (*PoolConfig, error) {
