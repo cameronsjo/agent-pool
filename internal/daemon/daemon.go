@@ -520,10 +520,13 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		}
 	}()
 
+	// Append pool MCP tool names so they're pre-approved in headless mode
+	allTools := append(tools, agentmcp.ExpertToolNames...)
+
 	cfg := &expert.SpawnConfig{
 		Name:          expertName,
 		Model:         model,
-		AllowedTools:  tools,
+		AllowedTools:  allTools,
 		ProjectDir:    projectDir,
 		ExpertDir:     expertDir,
 		PoolDir:       d.poolDir,

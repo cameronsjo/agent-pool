@@ -7,6 +7,18 @@ import (
 	"os/exec"
 )
 
+// ExpertToolNames returns the --allowedTools names for pool MCP tools.
+// Claude Code requires MCP tools to be explicitly allowed in headless mode.
+// Format: mcp__<server-name>__<tool-name>
+var ExpertToolNames = []string{
+	"mcp__agent-pool__pool_read_state",
+	"mcp__agent-pool__pool_update_state",
+	"mcp__agent-pool__pool_append_error",
+	"mcp__agent-pool__pool_send_response",
+	"mcp__agent-pool__pool_recall",
+	"mcp__agent-pool__pool_search_index",
+}
+
 // MCPConfig is the JSON structure claude expects for --mcp-config.
 type MCPConfig struct {
 	MCPServers map[string]MCPServerEntry `json:"mcpServers"`
