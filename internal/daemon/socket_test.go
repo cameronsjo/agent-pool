@@ -245,6 +245,62 @@ project_dir = "PROJECT_DIR"
 	shutdownDaemon(t, cancel, errCh)
 }
 
+func TestSocket_Subscribe(t *testing.T) {
+	poolDir := shortTempDir(t)
+
+	cfg := writePoolConfig(t, poolDir, `[pool]
+name = "watch-test"
+project_dir = "PROJECT_DIR"
+
+[experts.auth]
+`)
+
+	cancel, errCh := startTestDaemon(t, cfg, poolDir, &fakeSpawner{})
+
+	// Connect and subscribe
+	conn := connectSocket(t, poolDir)
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	json.NewEncoder(conn).Encode(map[string]string{"method": "subscribe"})
+
+	scanner := bufio.NewScanner(conn)
+
+	// Read ack
+	if !scanner.Scan() {
+		t.Fatal("no ack")
+	}
+	var ack map[string]any
+	json.Unmarshal(scanner.Bytes(), &ack)
+	if ack["status"] != "ok" {
+		t.Fatalf("ack status = %v", ack["status"])
+	}
+
+	// Send a task — should produce a task.routed event
+	writeMessage(t, filepath.Join(poolDir, "postoffice"),
+		"task-watch-001", "architect", "auth")
+
+	// Read events until we see task.routed
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	var foundRouted bool
+	for scanner.Scan() {
+		var event map[string]any
+		json.Unmarshal(scanner.Bytes(), &event)
+		if event["type"] == "task.routed" {
+			data, _ := event["data"].(map[string]any)
+			if data["id"] == "task-watch-001" {
+				foundRouted = true
+				break
+			}
+		}
+	}
+	if !foundRouted {
+		t.Error("did not receive task.routed event for task-watch-001")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
 // slowSpawner blocks on a channel regardless of context cancellation.
 // This tests that the drain waits for in-flight work even when the spawn
 // doesn't respond to context cancellation immediately (simulating a real

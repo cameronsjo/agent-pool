@@ -123,12 +123,36 @@ func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
 	}
 }
 
-// handleSubscribe is a placeholder for Phase 4 event streaming.
-func (s *socketServer) handleSubscribe(_ context.Context, conn net.Conn) {
+// handleSubscribe streams events to a client as NDJSON until the client
+// disconnects or the context is cancelled. The connection is NOT closed
+// by handleConn — this method manages the full lifecycle.
+func (s *socketServer) handleSubscribe(ctx context.Context, conn net.Conn) {
+	id, ch := s.daemon.events.subscribe()
+	defer s.daemon.events.unsubscribe(id)
+
+	// Send ack
 	s.writeResponse(conn, socketResponse{
-		Status:  "error",
-		Message: "subscribe not implemented",
+		Status: "ok",
+		Data:   map[string]string{"message": "subscribed"},
 	})
+
+	// Clear deadline for streaming
+	conn.SetDeadline(time.Time{})
+
+	enc := json.NewEncoder(conn)
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := enc.Encode(event); err != nil {
+				return // client disconnected
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }
 
 // writeResponse encodes a response as a single JSON line.

@@ -34,6 +34,8 @@ func main() {
 		cmdStop()
 	case "status":
 		cmdStatus()
+	case "watch":
+		cmdWatch()
 	case "mcp":
 		cmdMCP()
 	case "flush":
@@ -219,6 +221,156 @@ func cmdStatus() {
 	}
 }
 
+func cmdWatch() {
+	explicit := ""
+	if len(os.Args) > 2 {
+		explicit = os.Args[2]
+	}
+
+	poolDir, err := config.DiscoverPoolDir(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	sockPath := filepath.Join(poolDir, "daemon.sock")
+	conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: connecting to daemon (is it running?): %v\n", err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	// Send subscribe request
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := json.NewEncoder(conn).Encode(map[string]string{"method": "subscribe"}); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Read ack
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		fmt.Fprintf(os.Stderr, "error: no ack from daemon\n")
+		os.Exit(1)
+	}
+	var ack socketResponse
+	if err := json.Unmarshal(scanner.Bytes(), &ack); err != nil || ack.Status != "ok" {
+		fmt.Fprintf(os.Stderr, "error: subscribe failed: %s\n", ack.Message)
+		os.Exit(1)
+	}
+
+	// Clear deadline for streaming
+	conn.SetDeadline(time.Time{})
+
+	// Handle Ctrl-C cleanly
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		conn.Close()
+	}()
+
+	fmt.Println("Watching daemon events (Ctrl-C to stop)...")
+	fmt.Println()
+
+	// ANSI colors
+	const (
+		reset  = "\033[0m"
+		green  = "\033[32m"
+		red    = "\033[31m"
+		yellow = "\033[33m"
+		cyan   = "\033[36m"
+	)
+
+	type event struct {
+		Type      string          `json:"type"`
+		Timestamp time.Time       `json:"timestamp"`
+		Data      json.RawMessage `json:"data"`
+	}
+
+	for scanner.Scan() {
+		var e event
+		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
+			continue
+		}
+
+		ts := e.Timestamp.Format("15:04:05")
+		var color, detail string
+
+		switch e.Type {
+		case "task.routed":
+			color = cyan
+			var d struct {
+				ID   string `json:"id"`
+				From string `json:"from"`
+				To   string `json:"to"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = fmt.Sprintf("%s -> %s  (%s)", d.From, d.To, d.ID)
+
+		case "expert.spawning":
+			color = yellow
+			var d struct {
+				Expert string `json:"expert"`
+				TaskID string `json:"task_id"`
+				Model  string `json:"model"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = fmt.Sprintf("%s  task=%s  model=%s", d.Expert, d.TaskID, d.Model)
+
+		case "expert.completed":
+			color = green
+			var d struct {
+				Expert   string `json:"expert"`
+				TaskID   string `json:"task_id"`
+				Duration string `json:"duration"`
+				Summary  string `json:"summary"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = fmt.Sprintf("%s  task=%s  %s", d.Expert, d.TaskID, d.Duration)
+			if d.Summary != "" {
+				if len(d.Summary) > 60 {
+					d.Summary = d.Summary[:60] + "..."
+				}
+				detail += "  " + d.Summary
+			}
+
+		case "expert.failed":
+			color = red
+			var d struct {
+				Expert   string `json:"expert"`
+				TaskID   string `json:"task_id"`
+				ExitCode int    `json:"exit_code"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = fmt.Sprintf("%s  task=%s  exit=%d", d.Expert, d.TaskID, d.ExitCode)
+
+		case "task.cancelled":
+			color = red
+			var d struct {
+				TaskID string `json:"task_id"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = d.TaskID
+
+		case "task.unblocked":
+			color = green
+			var d struct {
+				TaskID string `json:"task_id"`
+				Expert string `json:"expert"`
+			}
+			json.Unmarshal(e.Data, &d)
+			detail = fmt.Sprintf("%s -> %s", d.TaskID, d.Expert)
+
+		default:
+			detail = string(e.Data)
+		}
+
+		fmt.Printf("[%s] %s%-18s%s %s\n", ts, color, e.Type, reset, detail)
+	}
+}
+
 // socketResponse mirrors the daemon's response type for CLI deserialization.
 type socketResponse struct {
 	Status  string          `json:"status"`
@@ -395,6 +547,7 @@ Usage:
   agent-pool start [pool-dir]                          Start the daemon for a pool
   agent-pool stop [pool-dir]                           Stop a running daemon
   agent-pool status [pool-dir]                         Show daemon status
+  agent-pool watch [pool-dir]                          Stream daemon events
   agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
   agent-pool mcp --pool <dir> --role <role>            Start built-in role MCP server
   agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state

@@ -56,6 +56,7 @@ type Daemon struct {
 	drainTimeout time.Duration // max wait for in-flight goroutines on shutdown (default 30s)
 	startedAt    time.Time
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
+	events       *eventBus
 }
 
 // Option configures a Daemon.
@@ -110,6 +111,7 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 		draining:     make(map[string]bool),
 		spawner:      defaultSpawner{},
 		drainTimeout: 30 * time.Second,
+		events:       newEventBus(),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -266,6 +268,11 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 		"id", routed.ID,
 		"to", routed.To,
 	)
+	d.events.emit(Event{
+		Type:      EventTaskRouted,
+		Timestamp: time.Now(),
+		Data:      TaskRoutedData{ID: routed.ID, From: routed.From, To: routed.To, Type: string(routed.Type)},
+	})
 
 	if routed.Type == mail.TypeTask || routed.Type == mail.TypeQuestion {
 		d.registerTask(routed)
@@ -371,6 +378,11 @@ func (d *Daemon) handleCancel(msg *mail.Message, cancelPath string) {
 			"cancel_id", msg.ID,
 			"target_id", targetID,
 		)
+		d.events.emit(Event{
+			Type:      EventTaskCancelled,
+			Timestamp: time.Now(),
+			Data:      TaskCancelledData{TaskID: targetID},
+		})
 
 	case taskboard.StatusActive:
 		task.CancelNote = "cancel requested while active"
@@ -537,6 +549,12 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	d.mu.Unlock()
 
 	model, tools := d.resolveExpertConfig(expertName)
+
+	d.events.emit(Event{
+		Type:      EventExpertSpawning,
+		Timestamp: time.Now(),
+		Data:      ExpertSpawningData{Expert: expertName, TaskID: msg.ID, Model: model},
+	})
 	projectDir := d.resolveProjectDir()
 	expertDir := d.resolveExpertDir(expertName)
 
@@ -641,6 +659,11 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			"duration", result.Duration,
 			"summary", result.Summary,
 		)
+		d.events.emit(Event{
+			Type:      EventExpertFailed,
+			Timestamp: time.Now(),
+			Data:      ExpertFailedData{Expert: expertName, TaskID: result.TaskID, ExitCode: result.ExitCode},
+		})
 		d.markTaskFailed(msg.ID, result.ExitCode)
 		return true
 	}
@@ -662,6 +685,17 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		"duration", result.Duration,
 		"summary", result.Summary,
 	)
+	d.events.emit(Event{
+		Type:      EventExpertCompleted,
+		Timestamp: time.Now(),
+		Data: ExpertCompletedData{
+			Expert:   expertName,
+			TaskID:   result.TaskID,
+			Duration: result.Duration.String(),
+			ExitCode: result.ExitCode,
+			Summary:  result.Summary,
+		},
+	})
 
 	return true
 }
@@ -738,6 +772,11 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 			if t, ok := d.board.Get(id); ok && !seen[t.Expert] {
 				seen[t.Expert] = true
 				expertsToWake = append(expertsToWake, t.Expert)
+				d.events.emit(Event{
+					Type:      EventTaskUnblocked,
+					Timestamp: time.Now(),
+					Data:      TaskUnblockedData{TaskID: id, Expert: t.Expert},
+				})
 			}
 		}
 	}
