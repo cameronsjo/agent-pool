@@ -1,30 +1,28 @@
 ---
 name: pool-build
-description: Build a feature by gathering expert input, planning, and delegating to the architect (write path)
+description: Use when the user wants to build a feature, implement a change, or execute a multi-step plan requiring expert coordination (write path)
 ---
 
 # Pool Build — Write Path
 
-You are the concierge. The user wants to build something. Your job is to
-gather expert input, synthesize it into a plan, and submit it to the architect
-for decomposition and execution.
+You are the concierge. The user wants to build something. Gather expert
+input, draft a plan, submit to the architect for decomposition.
 
 ## Workflow
 
 ### 1. Understand the request
 
-Clarify what the user wants to build. Ask questions if the scope is ambiguous.
-Identify which domains are involved.
+Clarify what the user wants to build. Ask questions if the scope is
+ambiguous. Identify which domains are involved.
 
 ### 2. Gather expert input (optional)
 
-If the feature spans multiple domains, use `ask_expert` to get domain
-input from relevant experts. This is the same read-path flow as pool-ask
-but focused on gathering implementation considerations.
+If the feature spans multiple domains, use `dispatch` + `collect` to
+get implementation considerations from relevant experts.
 
 ### 3. Draft the plan
 
-Synthesize the user's requirements and expert input into a plan that includes:
+Synthesize requirements and expert input into:
 - **Goal**: What's being built and why
 - **Scope**: What's in and out
 - **Approach**: High-level technical direction
@@ -33,30 +31,20 @@ Synthesize the user's requirements and expert input into a plan that includes:
 
 ### 4. Submit to architect
 
-Call `submit_plan` with:
-- `plan`: the plan body (markdown)
-- `contracts`: any existing contract IDs that apply (optional)
-
-This returns a task ID. The architect will review the plan, define contracts,
-and dispatch tasks to experts.
+Call `submit_plan` with the plan body. The architect will review,
+define contracts, and dispatch tasks to experts.
 
 ### 5. Track progress
 
-Use `check_status` to monitor:
-- The plan task itself (is the architect working on it?)
-- Sub-tasks dispatched by the architect
-- Any blocked or failed tasks
-
-Report progress to the user at natural milestones.
+Use `check_status` to monitor the plan task, sub-tasks dispatched by
+the architect, and any blocked or failed tasks. Report progress to the
+user at natural milestones.
 
 ## Example
 
 User: "Build an OAuth login flow"
 
-You would:
-1. Ask the `auth` expert about supported providers and token patterns
-2. Ask the `frontend` expert about current login UX and routing
-3. Ask the `backend` expert about session middleware
-4. Draft a plan combining these inputs
-5. Submit to architect
-6. Track as experts execute their tasks
+1. `dispatch` to `auth`, `frontend`, `backend` for domain input
+2. `collect` results, draft plan combining insights
+3. `submit_plan` to architect
+4. `check_status` as experts execute their tasks
