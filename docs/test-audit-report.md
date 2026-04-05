@@ -1,88 +1,105 @@
-# Test Audit Report -- agent-pool v0.5 (branch scope)
+# Test Audit Report — agent-pool (full scope)
 
-**Branch:** `feat/v0.5-concierge-plugin` vs `main`
-**Date:** 2026-04-04
-**Scope:** Files changed on branch only
+**Date:** 2026-04-05
+**Scope:** Full codebase after v0.6 completion
+**Go version:** 1.26.1
 
 ## Summary
 
-- **Source files changed:** 5 | **Test files changed:** 2 | **Ratio:** 2.5:1
-- **Package coverage:** `internal/mcp` 78.0%, `internal/expert` 84.8%
-- **New functions:** All have tests (none at 0%)
-- **Uncovered paths:** 13 (high risk: 2, medium: 4, low: 3, skip: 4)
-- **Quality issues:** 4 (P0: 0, P1: 1, P2: 3)
+- Source files: 29 | Test files: 25 | Ratio: 1.2:1
+- Overall coverage: **69.9%** (threshold: 65%)
+- Untested functions: 14 (high risk: 1, medium: 1, low: 0, skip: 12)
+- Quality issues: 14 (P0: 0, P1: 2, P2: 4, P3: 2)
 
----
+## Coverage Gaps (by risk)
 
-## Coverage Gaps by Risk
+### High Risk Untested
 
-### High Risk
+| Function | File | Classification | Why It Matters |
+|----------|------|---------------|----------------|
+| `DiscoverPoolDir` | `internal/config/config.go:89` | Configuration | Used by every CLI command; incorrect discovery could point at wrong pool |
 
-| Function | File:Line | Coverage | Classification | Uncovered Path | Why It Matters |
-|----------|-----------|----------|---------------|----------------|----------------|
-| `pollForCompletion` | `concierge_tools.go:150` | 75.0% | I/O BOUNDARY | Timeout (context deadline) | Primary failure mode when daemon is down or expert hangs |
-| `pollForCompletion` | `concierge_tools.go:150` | 75.0% | STATE MACHINE | `StatusCancelled` branch | Real operational path; error includes cancel note |
+### Medium Risk Untested
 
-### Medium Risk
-
-| Function | File:Line | Coverage | Classification | Uncovered Path | Why It Matters |
-|----------|-----------|----------|---------------|----------------|----------------|
-| `handleAskExpert` | `concierge_tools.go:73` | 84.6% | I/O BOUNDARY | `os.WriteFile` error | Filesystem full/permissions; user gets opaque error |
-| `handleSubmitPlan` | `concierge_tools.go:222` | 84.0% | I/O BOUNDARY | `os.WriteFile` error | Same filesystem failure class |
-| `handleListExperts` | `concierge_tools.go:357` | 78.6% | CONFIGURATION | `config.LoadPool` error | Missing pool.toml is common misconfiguration |
-| `readExpertResult` | `concierge_tools.go:210` | 83.3% | I/O BOUNDARY | `expert.ReadLog` error | Missing log file (race with daemon) |
-
-### Low Risk
-
-| Function | File:Line | Coverage | Classification | Uncovered Path | Why It Matters |
-|----------|-----------|----------|---------------|----------------|----------------|
-| `handleAskExpert` | `concierge_tools.go:73` | 84.6% | I/O BOUNDARY | `mail.Compose` error | Requires invalid message fields; validated upstream |
-| `handleSubmitPlan` | `concierge_tools.go:222` | 84.0% | I/O BOUNDARY | `mail.Compose` error | Same -- requires nil/invalid fields |
-| `handleListExperts` | `concierge_tools.go:357` | 78.6% | CONFIGURATION | `json.MarshalIndent` error | Impossible with valid Go string slices |
+| Function | File | Classification | Why It Matters |
+|----------|------|---------------|----------------|
+| `connectAndSend` | `cmd/agent-pool/main.go:382` | I/O Boundary | Socket client helper; error handling paths (connection refused, timeout) affect UX |
 
 ### Not Worth Unit Testing (skipped)
 
-| Function | File:Line | Pattern | Rationale |
-|----------|-----------|---------|-----------|
-| `RegisterConciergeTools` nil guard | `concierge_tools.go:31` | Defensive check | Single-line guard; callers never pass nil |
-| `handleCheckStatus` marshal errors | `concierge_tools.go:287` | Framework glue | `json.MarshalIndent` on `*taskboard.Task` can't fail with valid data |
-| `handleSubmitPlan` marshal error | `concierge_tools.go:222` | Framework glue | Same -- valid structs don't fail marshal |
-| `cmd/agent-pool/main.go` at 8.7% | `main.go` | Entry point | CLI glue; `parseFlagsFromArgs` (the logic) is at 100% |
+| Function | File | Pattern | Rationale |
+|----------|------|---------|-----------|
+| `main` | `cmd/agent-pool/main.go:24` | Entry point | Pure dispatch switch, no logic |
+| `cmdStart` | `cmd/agent-pool/main.go:56` | Entry point | Orchestration glue (load config, create daemon, block) |
+| `cmdStop` | `cmd/agent-pool/main.go:118` | Thin wrapper | Calls `connectAndSend("stop")` + prints result |
+| `cmdStatus` | `cmd/agent-pool/main.go:144` | CLI rendering | JSON pretty-print; no logic worth testing |
+| `cmdWatch` | `cmd/agent-pool/main.go:224` | CLI rendering | ANSI formatting; no logic worth testing |
+| `cmdMCP` | `cmd/agent-pool/main.go:418` | Entry point | Flag parsing + `agentmcp.Run()` delegation |
+| `cmdFlush` | `cmd/agent-pool/main.go:465` | Thin wrapper | Flag parsing + `hooks.Flush()` delegation |
+| `cmdGuard` | `cmd/agent-pool/main.go:489` | Thin wrapper | Flag parsing + `hooks.Guard()` delegation |
+| `newStderrLogger` | `cmd/agent-pool/main.go:515` | Trivial factory | Single expression, zero branching |
+| `parseFlags` | `cmd/agent-pool/main.go:522` | Thin wrapper | Delegates to `parseFlagsFromArgs` (100% covered) |
+| `printUsage` | `cmd/agent-pool/main.go:543` | Help text | Framework glue, no logic |
+| `defaultSpawner.Spawn` | `internal/daemon/daemon.go:37` | Thin wrapper | Single delegation to `expert.Spawn` |
 
----
+### Partially Covered (worth noting)
+
+| Function | File | Coverage | Gap |
+|----------|------|----------|-----|
+| `Status` | `daemon.go:1031` | 62.5% | Active tasks branch untested |
+| `ParseHumanInbox` | `presenter.go:116` | 60.0% | Telegram/file modes untested (future) |
+| `WriteFile` | `atomicfile.go:13` | 45.5% | Fsync/rename error paths |
+| `resolveProjectDir` | `daemon.go:1103` | 60.0% | Tilde expansion path |
 
 ## Quality Issues
 
-### P0 -- Likely Catching Zero Bugs
+### P0 — Likely Catching Zero Bugs
 
 None found.
 
-### P1 -- Masking Real Issues
+### P1 — Masking Real Issues
 
-| File | Lines | Pattern | Detail |
-|------|-------|---------|--------|
-| `concierge_tools_test.go` | 152, 241 | Sleep in test | `time.Sleep(50ms)` in goroutines polling the postoffice. Mitigated by retry loop (polls up to 50 times), but nonzero flake risk on slow CI. |
+**1. `time.Sleep` for synchronization (30+ occurrences)**
+- Files: `daemon_test.go`, `watcher_test.go`, `approval_test.go`, `socket_test.go`
+- Pattern: `time.Sleep(50ms)` to `time.Sleep(2s)` for goroutine synchronization
+- Risk: Flaky on slow CI runners or under load
+- Mitigation: `waitForTaskStatus` polling helper exists but many tests use raw sleeps
 
-### P2 -- Test Debt
+**2. `time.Now()` in tests without injection**
+- Files: `taskboard_test.go:109`, `contract_test.go:173`
+- Pattern: Captures before/after timestamps for boundary checks
+- Risk: Nanosecond-boundary failures (extremely rare but non-deterministic)
 
-| File | Lines | Pattern | Detail |
-|------|-------|---------|--------|
-| `concierge_tools_test.go` | 397-407 | Existence-only assertion | `TestCheckStatus_SingleTask` uses `strings.Contains` for task ID and status. Doesn't validate JSON structure -- a malformed response containing those substrings would pass. |
-| `concierge_tools_test.go` | 165-180 | No subtests | `TestAskExpert_MissingParams` tests two cases sequentially. If the first fails, the second never runs. Should use `t.Run` for isolation. |
-| `concierge_tools_test.go` | 172, 255, 412+ | `time.Now()` in fixtures | Used for `CreatedAt`/`CompletedAt` in test data. Not a flake risk (no time-dependent assertions) but a determinism code smell -- prefer fixed time constants. |
+### P2 — Test Debt
 
-### P3 -- Notes
+**3. Polling loops instead of event-driven sync**
+- File: `daemon_test.go` (6+ locations)
+- Pattern: `deadline := time.Now().Add(5*time.Second)` with sleep loop
+- Better: Channel-based signaling or sync.WaitGroup
 
-| File | Lines | Pattern | Detail |
-|------|-------|---------|--------|
-| `concierge_tools_test.go` | 109 | Cross-file helper | Reuses `listArchitectToolNames` from `architect_tools_test.go`. Works (same package) but creates implicit coupling. |
+**4. Existence-only assertions**
+- Files: `daemon_test.go`, `router_test.go`
+- Pattern: `os.Stat(path)` checks file exists but not content
 
----
+**5. `connectSocket` retry loop**
+- File: `socket_test.go:47-63`
+- Pattern: 20 retries with 50ms sleep to wait for socket readiness
+
+**6. Test helper complexity**
+- File: `daemon_test.go`
+- `startTestDaemon` does socket path override, background goroutine, 500ms sleep
+
+### P3 — Notes
+
+**7. Repeated pool config setup**
+- File: `daemon_test.go` — 15+ tests write nearly identical pool.toml configs
+
+**8. `WithSocketPath` at 0% coverage**
+- Used conditionally by `startTestDaemon` path-length check; tool doesn't see it
 
 ## Recommended Next Steps
 
-1. **Run `write-tests`** for 2 high-risk gaps -- `pollForCompletion` timeout and cancellation paths. Biggest bang for the buck.
-2. **Add `TestListExperts_MissingConfig`** -- don't write pool.toml to temp dir, verify error. Easy win for medium-risk gap.
-3. **Refactor `TestAskExpert_MissingParams` into subtests** -- `t.Run("missing_expert", ...)` for isolation. Low-effort P2 fix.
-4. `make-testable` is NOT needed -- all functions are testable via the MCP server interface.
-5. `setup-coverage` is NOT needed -- Makefile already has `test-cover` and `test-gaps` targets.
+1. **Write tests for `DiscoverPoolDir`** — high-risk config function with directory traversal logic
+2. **Write tests for `connectAndSend`** — medium-risk socket client with error handling paths
+3. **Replace readiness sleep** — the 500ms sleep in `startTestDaemon` is the root of downstream flakiness
+4. **No immediate action on P2/P3** — debt indicators, not bugs; address when touching those files
