@@ -38,9 +38,9 @@ Full design: `docs/plans/architecture.md`
 Agent Pool builds ON Claude Code via external interfaces — it does NOT modify Claude Code source.
 
 - **CLI**: `claude -p --output-format stream-json --model sonnet --allowedTools "..."`
-- **MCP server**: `agent-pool mcp --pool {name} --expert {name}` for typed pool tools
+- **MCP server**: `agent-pool mcp --pool {name} --expert {name}` (experts) or `--role {architect|concierge}` (built-in roles)
 - **Hooks**: Stop → flush, PreToolUse → code ownership guard
-- **Plugin**: Skills for concierge workflows
+- **Plugin**: `plugin/` — skills (`pool-ask`, `pool-build`, `pool-status`) + `.mcp.json` for concierge
 - **Env vars**: `AGENT_POOL_NAME`, `AGENT_POOL_EXPERT`, `AGENT_POOL_TASK_ID`
 
 ## Project Structure
@@ -48,14 +48,19 @@ Agent Pool builds ON Claude Code via external interfaces — it does NOT modify 
 ```
 cmd/agent-pool/       CLI entry point
 internal/
+  approval/           Human approval gate (filesystem-based polling)
+  atomicfile/         Atomic file writes (temp + fsync + rename)
   config/             pool.toml parsing and validation
+  contract/           Versioned interface specs between experts
   daemon/             Process supervisor, fsnotify, lifecycle management
-  mail/               Message parsing, routing, delivery
   expert/             Session spawning, prompt assembly, state management
+  mail/               Message parsing, routing, delivery
   mcp/                MCP server (stdio, per-role tool sets)
+  taskboard/          DAG-based task tracking with dependency evaluation
+plugin/               Claude Code plugin (skills, MCP config, identity)
 docs/
   plans/              Architecture and development plans
-  adr/                Architecture Decision Records
+  prompts/            Version-specific development prompts
 scripts/              Build and utility scripts
 ```
 
@@ -72,26 +77,20 @@ make check            # vet + lint + test
 
 ## Implementation Status
 
-**v0.2 complete** — MCP + State Management:
+**v0.5 complete** — through Concierge Plugin. See `docs/plans/architecture.md` § Implementation Phasing for full v0.1–v0.8 roadmap.
 
-- [x] fsnotify watching postoffice
-- [x] Mail routing (parse YAML header, copy to inbox)
-- [x] Expert spawning via `claude -p`
-- [x] Log capture to `logs/{task-id}.json`
-- [x] Manual task submission (write .md to postoffice/)
-- [x] MCP server (stdio, per-expert) with expert tool set
-- [x] `pool_update_state`, `pool_append_error`, `pool_read_state`
-- [x] `pool_send_response`, `pool_recall`, `pool_search_index`
-- [x] Stop hook for flush guarantee (`agent-pool flush`)
-- [x] PreToolUse hook for code ownership guard (`agent-pool guard`)
-- [x] MCP config generation + spawn integration (`--mcp-config`)
+| Version | Milestone | Key Additions |
+|---------|-----------|---------------|
+| v0.2 | MCP + State | Expert tools, mail routing, spawning, hooks |
+| v0.3 | Task Board | DAG dependencies, cancel/handoff, session timeout |
+| v0.4 | Architect | Contracts, approval gate, task delegation, verification |
+| v0.5 | Concierge | Concierge MCP tools, plugin scaffold, read/write path flows |
 
-Next: **v0.3** — Task Board + Dependencies
-
-See `docs/plans/architecture.md` § Implementation Phasing for v0.1–v0.8 roadmap.
+Next: **v0.6** — Researcher + Curation
 
 ## Code Conventions
 
+- **Module**: `github.com/cameronsjo/agent-pool`
 - **Go style**: Follow standard Go conventions (`gofmt`, `goimports`)
 - **Error handling**: Wrap errors with `fmt.Errorf("context: %w", err)`
 - **Logging**: Structured JSON via `slog` (stdlib)
@@ -108,4 +107,8 @@ See `docs/plans/architecture.md` § Implementation Phasing for v0.1–v0.8 roadm
 - **Non-zero expert exit preserves inbox file** — stays for retry/inspection. Logs always written regardless of exit code
 - **Daemon drains on startup** — pre-existing postoffice and inbox files are processed when the daemon starts
 - **`Spawner` interface** — `daemon.Daemon` accepts `WithSpawner(s)` for test injection. Use `fakeSpawner` pattern in tests
+- **`handleInbox` runs in goroutines** — daemon tests must wait for task completion before shutdown, or TempDir cleanup races with log writes. Use `waitForTaskStatus` helper
+- **Built-in role dirs are top-level** — `{poolDir}/architect/`, `{poolDir}/concierge/`, NOT under `experts/`. Use `mail.ResolveExpertDir` to resolve correctly
+- **MCP test helpers live in `testhelp_test.go`** — `makePoolDirs`, `buildMCPTestServer`, `callTool`, `resultText`. Don't duplicate in new test files
+- **`postMessage` helper** — use `mcp.postMessage(poolDir, msg)` for all postoffice writes. Handles compose + MkdirAll + atomic write
 - **Architecture doc is source of truth** — `docs/plans/architecture.md`, not external copies

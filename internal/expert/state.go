@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cameronsjo/agent-pool/internal/atomicfile"
 )
 
 // MaxStateSize is the maximum allowed size for state.md content in bytes.
@@ -46,25 +48,8 @@ func WriteState(expertDir, content string) error {
 
 	path := filepath.Join(expertDir, "state.md")
 
-	tmp, err := os.CreateTemp(expertDir, ".state-*.md")
-	if err != nil {
-		return fmt.Errorf("creating temp file: %w", err)
-	}
-	tmpPath := tmp.Name()
-
-	if _, err := tmp.WriteString(content + "\n"); err != nil {
-		tmp.Close()
-		os.Remove(tmpPath)
-		return fmt.Errorf("writing temp file: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("closing temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
-		return fmt.Errorf("renaming temp file: %w", err)
+	if err := atomicfile.WriteFile(path, []byte(content+"\n")); err != nil {
+		return fmt.Errorf("writing state: %w", err)
 	}
 
 	return nil

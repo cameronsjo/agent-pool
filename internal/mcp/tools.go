@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -157,16 +156,8 @@ func handleSendResponse(cfg *ServerConfig) server.ToolHandlerFunc {
 			Body:      body,
 		}
 
-		composed, err := mail.Compose(msg)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("composing message: %v", err)), nil
-		}
-
-		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
-		path := filepath.Join(postoffice, id+".md")
-
-		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
+		if err := postMessage(cfg.PoolDir, msg); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("response sent to %s (id: %s)", to, id)), nil

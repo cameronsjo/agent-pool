@@ -31,7 +31,6 @@ package mcp_test
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -51,90 +50,23 @@ import (
 // setupArchitectPool creates a pool directory with architect-relevant dirs.
 func setupArchitectPool(t *testing.T) string {
 	t.Helper()
-	poolDir := t.TempDir()
-	for _, dir := range []string{
-		"postoffice",
-		"contracts",
-		"architect/inbox",
-		"architect/verifications",
-		"experts/architect/logs",
-	} {
-		if err := os.MkdirAll(filepath.Join(poolDir, dir), 0o755); err != nil {
-			t.Fatalf("creating %s: %v", dir, err)
-		}
-	}
-	return poolDir
+	return makePoolDirs(t,
+		"postoffice", "contracts",
+		"architect/inbox", "architect/verifications",
+	)
 }
 
-// buildArchitectTestServer creates an MCP server with both expert and architect
-// tools registered. Follows the same pattern as buildTestServer.
+// buildArchitectTestServer creates an MCP server with architect + expert tools.
 func buildArchitectTestServer(t *testing.T, poolDir string) *server.MCPServer {
 	t.Helper()
-	cfg := &agentmcp.ServerConfig{
-		PoolDir:      poolDir,
-		ExpertName:   "architect",
-		Role:         "architect",
-		ApprovalMode: "none",
-		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
-	}
-	srv := server.NewMCPServer("agent-pool-test", "0.4.0-test")
-	agentmcp.RegisterExpertTools(srv, cfg)
-	agentmcp.RegisterArchitectTools(srv, cfg)
-
-	// Initialize (MCP handshake)
-	initMsg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]any{},
-			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
-		},
-	})
-	srv.HandleMessage(context.Background(), initMsg)
-
-	return srv
-}
-
-// listArchitectToolNames sends a tools/list request and returns tool names.
-func listArchitectToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
-	t.Helper()
-
-	msg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      99,
-		"method":  "tools/list",
-		"params":  map[string]any{},
-	})
-
-	resp := srv.HandleMessage(context.Background(), msg)
-	respBytes, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshaling list response: %v", err)
-	}
-
-	var rpcResp struct {
-		Result *mcp.ListToolsResult `json:"result"`
-	}
-	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
-		t.Fatalf("unmarshaling list response: %v", err)
-	}
-
-	names := make(map[string]bool)
-	if rpcResp.Result != nil {
-		for _, tool := range rpcResp.Result.Tools {
-			names[tool.Name] = true
-		}
-	}
-	return names
+	return buildMCPTestServer(t, poolDir, "architect", "architect")
 }
 
 func TestArchitectTools_Registration(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	tools := listArchitectToolNames(t, srv)
+	tools := listToolNames(t, srv)
 
 	expected := []string{
 		// Architect tools

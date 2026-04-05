@@ -54,6 +54,42 @@ import (
 	"github.com/cameronsjo/agent-pool/internal/taskboard"
 )
 
+// writePoolConfig writes a pool.toml and returns the loaded config.
+// The toml string should include [pool], [experts.*], etc. sections.
+// project_dir is set to poolDir automatically if the toml contains the
+// placeholder PROJECT_DIR.
+func writePoolConfig(t *testing.T, poolDir, toml string) *config.PoolConfig {
+	t.Helper()
+	toml = strings.ReplaceAll(toml, "PROJECT_DIR", poolDir)
+	if err := os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("writing pool.toml: %v", err)
+	}
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+	return cfg
+}
+
+// startTestDaemon creates a daemon with the given config and spawner, starts it
+// in a background goroutine, and waits for it to be ready. Returns a cancel
+// function and error channel. Call shutdownDaemon(t, cancel, errCh) to stop.
+func startTestDaemon(t *testing.T, cfg *config.PoolConfig, poolDir string, spawner *fakeSpawner) (context.CancelFunc, <-chan error) {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(spawner))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	// daemon.Run doesn't expose a readiness signal; sleep lets the watcher
+	// start and pre-existing messages drain before the test writes new ones.
+	time.Sleep(500 * time.Millisecond)
+	return cancel, errCh
+}
+
 // fakeSpawner records calls and returns canned results.
 type fakeSpawner struct {
 	mu       sync.Mutex

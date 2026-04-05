@@ -166,11 +166,6 @@ func handleSendTask(cfg *ServerConfig) server.ToolHandlerFunc {
 			Body:      body,
 		}
 
-		composed, err := mail.Compose(msg)
-		if err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("composing message: %v", err)), nil
-		}
-
 		// Approval gate: block on human approval if required
 		if shouldRequireApproval(cfg.ApprovalMode) {
 			gate := approval.DefaultGate(cfg.PoolDir)
@@ -182,11 +177,8 @@ func handleSendTask(cfg *ServerConfig) server.ToolHandlerFunc {
 			}
 		}
 
-		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
-		path := filepath.Join(postoffice, id+".md")
-
-		if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("writing to postoffice: %v", err)), nil
+		if err := postMessage(cfg.PoolDir, msg); err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf("task %s sent to %s", id, to)), nil
@@ -270,7 +262,6 @@ func handleAmendContract(cfg *ServerConfig, store *contract.Store) server.ToolHa
 		}
 
 		// Fan-out: send notify messages to all parties
-		postoffice := filepath.Join(cfg.PoolDir, "postoffice")
 		for _, party := range amended.Between {
 			notifyMsg := &mail.Message{
 				ID:        fmt.Sprintf("notify-%s-v%d-%s", id, amended.Version, party),
@@ -283,14 +274,8 @@ func handleAmendContract(cfg *ServerConfig, store *contract.Store) server.ToolHa
 				Body:      fmt.Sprintf("Contract %s has been amended to version %d. Please review the updated specification.", id, amended.Version),
 			}
 
-			composed, composeErr := mail.Compose(notifyMsg)
-			if composeErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("composing notify for %s: %v", party, composeErr)), nil
-			}
-
-			path := filepath.Join(postoffice, notifyMsg.ID+".md")
-			if writeErr := os.WriteFile(path, []byte(composed), 0o644); writeErr != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("writing notify for %s: %v", party, writeErr)), nil
+			if err := postMessage(cfg.PoolDir, notifyMsg); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("notify for %s: %v", party, err)), nil
 			}
 		}
 

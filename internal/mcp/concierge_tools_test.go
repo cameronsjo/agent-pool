@@ -32,7 +32,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,112 +40,32 @@ import (
 
 	"github.com/cameronsjo/agent-pool/internal/expert"
 	"github.com/cameronsjo/agent-pool/internal/mail"
-	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 	"github.com/cameronsjo/agent-pool/internal/taskboard"
 
-	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 )
 
 // setupConciergePool creates a pool directory with concierge-relevant dirs.
 func setupConciergePool(t *testing.T) string {
 	t.Helper()
-	poolDir := t.TempDir()
-	for _, dir := range []string{
-		"postoffice",
-		"concierge/inbox",
-		"architect/inbox",
-		"experts/auth/inbox",
-		"experts/auth/logs",
-		"experts/frontend/inbox",
-		"experts/frontend/logs",
-	} {
-		if err := os.MkdirAll(filepath.Join(poolDir, dir), 0o755); err != nil {
-			t.Fatalf("creating %s: %v", dir, err)
-		}
-	}
-	return poolDir
+	return makePoolDirs(t,
+		"postoffice", "concierge/inbox", "architect/inbox",
+		"experts/auth/inbox", "experts/auth/logs",
+		"experts/frontend/inbox", "experts/frontend/logs",
+	)
 }
 
 // buildConciergeTestServer creates an MCP server with expert + concierge tools.
 func buildConciergeTestServer(t *testing.T, poolDir string) *server.MCPServer {
 	t.Helper()
-	cfg := &agentmcp.ServerConfig{
-		PoolDir:    poolDir,
-		ExpertName: "concierge",
-		Role:       "concierge",
-		Logger:     slog.New(slog.NewTextHandler(os.Stderr, nil)),
-	}
-	srv := server.NewMCPServer("agent-pool-test", "0.5.0-test")
-	agentmcp.RegisterExpertTools(srv, cfg)
-	agentmcp.RegisterConciergeTools(srv, cfg)
-
-	initMsg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-03-26",
-			"capabilities":   map[string]any{},
-			"clientInfo":     map[string]any{"name": "test", "version": "0.1"},
-		},
-	})
-	srv.HandleMessage(t.Context(), initMsg)
-
-	return srv
+	return buildMCPTestServer(t, poolDir, "concierge", "concierge")
 }
 
 // fakeStreamJSON builds stream-json output containing a result message.
-func fakeStreamJSON(resultText string) []byte {
-	msg := fmt.Sprintf(`{"type":"result","result":%s}`, mustMarshal(resultText))
+func fakeStreamJSON(result string) []byte {
+	b, _ := json.Marshal(result)
+	msg := fmt.Sprintf(`{"type":"result","result":%s}`, string(b))
 	return []byte(msg + "\n")
-}
-
-func mustMarshal(v any) string {
-	data, _ := json.Marshal(v)
-	return string(data)
-}
-
-// callToolWithContext is like callTool but accepts a custom context.
-// Used to test timeout behavior by passing a short-deadline context.
-func callToolWithContext(t *testing.T, ctx context.Context, srv *server.MCPServer, name string, args map[string]any) *mcp.CallToolResult {
-	t.Helper()
-
-	msg := mustJSON(t, map[string]any{
-		"jsonrpc": "2.0",
-		"id":      2,
-		"method":  "tools/call",
-		"params": map[string]any{
-			"name":      name,
-			"arguments": args,
-		},
-	})
-
-	resp := srv.HandleMessage(ctx, msg)
-	respBytes, err := json.Marshal(resp)
-	if err != nil {
-		t.Fatalf("marshaling response: %v", err)
-	}
-
-	var rpcResp struct {
-		Result *mcp.CallToolResult `json:"result"`
-		Error  *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	if err := json.Unmarshal(respBytes, &rpcResp); err != nil {
-		t.Fatalf("unmarshaling response: %v\nraw: %s", err, string(respBytes))
-	}
-
-	if rpcResp.Error != nil {
-		t.Fatalf("JSON-RPC error: %d %s", rpcResp.Error.Code, rpcResp.Error.Message)
-	}
-	if rpcResp.Result == nil {
-		t.Fatalf("nil result in response: %s", string(respBytes))
-	}
-
-	return rpcResp.Result
 }
 
 // --- Registration ---
@@ -155,7 +74,7 @@ func TestConciergeTools_Registration(t *testing.T) {
 	poolDir := setupConciergePool(t)
 	srv := buildConciergeTestServer(t, poolDir)
 
-	tools := listArchitectToolNames(t, srv) // reuse: returns map of tool names
+	tools := listToolNames(t, srv)
 
 	expected := []string{
 		// Concierge tools
