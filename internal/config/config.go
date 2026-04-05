@@ -79,6 +79,34 @@ type ExpertSection struct {
 	AllowedTools []string `toml:"allowed_tools"`
 }
 
+// builtinRoleNames are the built-in role names that shared experts must not
+// conflict with. Kept in sync with mail.builtinRoles.
+var builtinRoleNames = map[string]bool{
+	"architect":  true,
+	"researcher": true,
+	"concierge":  true,
+}
+
+// Validate checks the pool config for internal consistency.
+// Returns an error if shared.include entries conflict with builtin roles or
+// pool-scoped experts, or contain invalid characters.
+func (c *PoolConfig) Validate() error {
+	for _, name := range c.Shared.Include {
+		if name == "" || name != filepath.Base(name) || name == "." || name == ".." {
+			return fmt.Errorf("invalid shared expert name %q: must be a simple filename", name)
+		}
+		if builtinRoleNames[name] {
+			return fmt.Errorf("shared expert %q conflicts with built-in role", name)
+		}
+		if c.Experts != nil {
+			if _, exists := c.Experts[name]; exists {
+				return fmt.Errorf("shared expert %q conflicts with pool-scoped expert", name)
+			}
+		}
+	}
+	return nil
+}
+
 // SharedExpertDir returns the user-level directory for a shared expert.
 // The path is ~/.agent-pool/experts/{name}/. The name must be a simple
 // filename (no path separators, not "." or "..").
@@ -192,6 +220,10 @@ func LoadPool(poolDir string) (*PoolConfig, error) {
 	}
 	if cfg.Curation.IntervalHours == 0 {
 		cfg.Curation.IntervalHours = 168
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("validating %s: %w", configPath, err)
 	}
 
 	return &cfg, nil
