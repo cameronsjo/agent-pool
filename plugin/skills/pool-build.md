@@ -31,8 +31,11 @@ Synthesize requirements and expert input into:
 
 ### 4. Submit to architect
 
-Call `submit_plan` with the plan body. The architect will review,
-define contracts, and dispatch tasks to experts.
+Call `submit_plan` with:
+- `plan`: the plan body (markdown)
+- `contracts`: existing contract IDs that apply (optional)
+
+The architect will review, define contracts, and dispatch tasks to experts.
 
 ### 5. Track progress
 

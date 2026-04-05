@@ -174,7 +174,10 @@ func cmdStatus() {
 	printStatusField := func(label, key string) {
 		if v, ok := data[key]; ok {
 			var s string
-			json.Unmarshal(v, &s)
+			if err := json.Unmarshal(v, &s); err != nil {
+				fmt.Printf("%-10s %s\n", label+":", string(v))
+				return
+			}
 			fmt.Printf("%-10s %s\n", label+":", s)
 		}
 	}
