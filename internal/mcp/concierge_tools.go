@@ -33,11 +33,30 @@ func RegisterConciergeTools(srv *server.MCPServer, cfg *ServerConfig) {
 
 	srv.AddTool(
 		mcp.NewTool("pool_ask_expert",
-			mcp.WithDescription("Send a question to an expert and wait for the response. Blocks until the expert completes or times out (5 min)."),
+			mcp.WithDescription("Send a question to an expert and wait for the response. BLOCKS until the expert completes or times out. For non-blocking dispatch, use pool_dispatch instead."),
 			mcp.WithString("expert", mcp.Required(), mcp.Description("Expert name to ask (e.g., 'auth', 'frontend')")),
 			mcp.WithString("question", mcp.Required(), mcp.Description("Question body (markdown)")),
 		),
 		handleAskExpert(cfg),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("pool_dispatch",
+			mcp.WithDescription("Send a question or task to an expert without waiting. Returns a task ID immediately. Use pool_collect to retrieve results later."),
+			mcp.WithString("expert", mcp.Required(), mcp.Description("Expert name (e.g., 'auth', 'frontend')")),
+			mcp.WithString("message", mcp.Required(), mcp.Description("Question or task body (markdown)")),
+			mcp.WithString("type", mcp.Description("Message type: 'question' (default) or 'task'")),
+		),
+		handleDispatch(cfg),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("pool_collect",
+			mcp.WithDescription("Check dispatched tasks and return results for any that have completed. Non-blocking — returns immediately with current status."),
+			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
+			mcp.WithString("task_ids", mcp.Required(), mcp.Description("Comma-separated task IDs to check")),
+		),
+		handleCollect(cfg),
 	)
 
 	srv.AddTool(
@@ -129,6 +148,146 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 		)
 
 		return mcp.NewToolResultText(result), nil
+	}
+}
+
+func handleDispatch(cfg *ServerConfig) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		expertName := request.GetString("expert", "")
+		message := request.GetString("message", "")
+		msgType := request.GetString("type", "question")
+
+		if expertName == "" {
+			return mcp.NewToolResultError("expert parameter is required"), nil
+		}
+		if message == "" {
+			return mcp.NewToolResultError("message parameter is required"), nil
+		}
+
+		var mailType mail.MessageType
+		switch msgType {
+		case "question", "":
+			mailType = mail.TypeQuestion
+		case "task":
+			mailType = mail.TypeTask
+		default:
+			return mcp.NewToolResultError(fmt.Sprintf("invalid type %q: must be 'question' or 'task'", msgType)), nil
+		}
+
+		prefix := "cq"
+		if mailType == mail.TypeTask {
+			prefix = "ct"
+		}
+		id := fmt.Sprintf("%s-%s-%d", prefix, expertName, time.Now().UnixNano())
+
+		msg := &mail.Message{
+			ID:        id,
+			From:      "concierge",
+			To:        expertName,
+			Type:      mailType,
+			Priority:  mail.PriorityNormal,
+			Timestamp: time.Now().UTC(),
+			Body:      message,
+		}
+
+		if err := postMessage(cfg.PoolDir, msg); err != nil {
+			cfg.Logger.Error("Failed to dispatch message",
+				"id", id,
+				"expert", expertName,
+				"error", err,
+			)
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+
+		cfg.Logger.Info("Successfully dispatched message",
+			"id", id,
+			"expert", expertName,
+			"type", msgType,
+		)
+
+		return mcp.NewToolResultText(fmt.Sprintf("dispatched (id: %s)", id)), nil
+	}
+}
+
+// collectResult represents one task's status in a pool_collect response.
+type collectResult struct {
+	ID       string  `json:"id"`
+	Expert   string  `json:"expert"`
+	Status   string  `json:"status"`
+	Duration string  `json:"duration,omitempty"`
+	Result   string  `json:"result,omitempty"`
+	Error    string  `json:"error,omitempty"`
+}
+
+func handleCollect(cfg *ServerConfig) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		idsStr := request.GetString("task_ids", "")
+		if idsStr == "" {
+			return mcp.NewToolResultError("task_ids parameter is required"), nil
+		}
+
+		var taskIDs []string
+		for _, id := range strings.Split(idsStr, ",") {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				taskIDs = append(taskIDs, id)
+			}
+		}
+
+		boardPath := filepath.Join(cfg.PoolDir, "taskboard.json")
+		board, err := taskboard.Load(boardPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("loading taskboard: %v", err)), nil
+		}
+
+		var results []collectResult
+		for _, id := range taskIDs {
+			task, found := board.Get(id)
+			if !found {
+				results = append(results, collectResult{
+					ID:     id,
+					Status: "not_found",
+				})
+				continue
+			}
+
+			cr := collectResult{
+				ID:     id,
+				Expert: task.Expert,
+				Status: string(task.Status),
+			}
+
+			if task.StartedAt != nil && task.CompletedAt != nil {
+				cr.Duration = task.CompletedAt.Sub(*task.StartedAt).Round(time.Second).String()
+			} else if task.StartedAt != nil {
+				cr.Duration = time.Since(*task.StartedAt).Round(time.Second).String()
+			}
+
+			if task.Status == taskboard.StatusCompleted {
+				result, readErr := readExpertResult(cfg.PoolDir, task.Expert, id)
+				if readErr != nil {
+					cr.Error = readErr.Error()
+				} else {
+					cr.Result = result
+				}
+			} else if task.Status == taskboard.StatusFailed {
+				cr.Error = "expert session failed"
+				if task.ExitCode != nil {
+					cr.Error = fmt.Sprintf("expert session failed (exit code: %d)", *task.ExitCode)
+				}
+			} else if task.Status == taskboard.StatusCancelled {
+				cr.Error = task.CancelNote
+			}
+
+			results = append(results, cr)
+		}
+
+		data, err := json.MarshalIndent(results, "", "  ")
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("marshaling results: %v", err)), nil
+		}
+
+		return mcp.NewToolResultText(string(data)), nil
 	}
 }
 
