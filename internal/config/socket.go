@@ -13,6 +13,11 @@ import (
 // limit (104 bytes). Both the daemon and CLI must use this to agree on
 // the socket location.
 func ResolveSockPath(poolDir string) string {
+	// Canonicalize so daemon and CLI agree on the path even when one
+	// uses a relative path and the other uses an absolute one.
+	if abs, err := filepath.Abs(poolDir); err == nil {
+		poolDir = abs
+	}
 	candidate := filepath.Join(poolDir, "daemon.sock")
 	if len(candidate) <= 100 {
 		return candidate

@@ -254,7 +254,11 @@ func cmdWatch() {
 	// Read ack
 	scanner := bufio.NewScanner(conn)
 	if !scanner.Scan() {
-		fmt.Fprintf(os.Stderr, "error: no ack from daemon\n")
+		if err := scanner.Err(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: reading ack: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "error: no ack from daemon\n")
+		}
 		os.Exit(1)
 	}
 	var ack socketResponse
@@ -371,6 +375,11 @@ func cmdWatch() {
 		}
 
 		fmt.Printf("[%s] %s%-18s%s %s\n", ts, color, e.Type, reset, detail)
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: stream interrupted: %v\n", err)
+		os.Exit(1)
 	}
 }
 
