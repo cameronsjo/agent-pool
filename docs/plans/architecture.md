@@ -748,9 +748,9 @@ The user-facing integration.
 
 **Validates:** Does the full read/write path flow feel fluid from the user's perspective?
 
-### v0.6 — Daemon Lifecycle + Observability
+### v0.6 — Daemon Lifecycle + Observability (added from dogfooding)
 
-Operational foundation. Reshuffled from v0.8 based on dogfooding (2026-04-05).
+Operational foundation surfaced by dogfooding on bosun (2026-04-05).
 Issues: #8, #9, #10, #11, #13.
 
 - [ ] Unix domain socket for CLI→daemon communication (`daemon.sock`)
@@ -764,7 +764,20 @@ Issues: #8, #9, #10, #11, #13.
 
 **Validates:** Can you operate a pool without staring at raw JSON logs? Can you stop/restart without pkill?
 
-### v0.7 — Researcher + Curation
+### v0.7 — Shared Experts + Multi-Pool
+
+Cross-project knowledge.
+
+- [ ] `~/.agent-pool/experts/` shared directory
+- [ ] `shared.include` in pool.toml
+- [ ] Layered state assembly (user + project overlay)
+- [ ] `scope` parameter in `pool_update_state`
+- [ ] Per-pool `shared-state/` overlays auto-created on first use
+- [ ] Multi-pool daemon (watch multiple pool directories)
+
+**Validates:** Does the shared expert model work across pools? Does layered state assembly produce coherent prompts?
+
+### v0.8 — Researcher + Curation
 
 Knowledge enrichment and hygiene.
 
@@ -777,20 +790,16 @@ Knowledge enrichment and hygiene.
 
 **Validates:** Does curation keep state.md lean over time? Does cold-start seeding produce useful initial state?
 
-### v0.8 — Shared Experts + Multi-Pool
+### v0.9 — Formulas + Polish
 
-Cross-project knowledge. Moved from v0.6 — not blocking real usage during dogfooding.
+Workflow templates and operational hardening.
 
-- [ ] `~/.agent-pool/experts/` shared directory
-- [ ] `shared.include` in pool.toml
-- [ ] Layered state assembly (user + project overlay)
-- [ ] `scope` parameter in `pool_update_state`
-- [ ] Per-pool `shared-state/` overlays auto-created on first use
-- [ ] Multi-pool daemon (watch multiple pool directories)
-- [ ] TOML formula parsing and instantiation
+- [ ] TOML formula parsing
+- [ ] Formula instantiation by architect
 - [ ] Config hot-reload (watch pool.toml)
+- [ ] Partial-write detection on mail files
 
-**Validates:** Does the shared expert model work across pools? Does layered state assembly produce coherent prompts?
+**Validates:** Can common workflows be templated and reused across pools?
 
 ## Design Lineage
 

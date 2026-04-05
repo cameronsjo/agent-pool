@@ -111,8 +111,9 @@ make check            # vet + lint + test
 | **v0.4** | Complete | Architect — contracts, verification loop, role-aware MCP |
 | **v0.5** | Complete | Concierge plugin — MCP tools, skills, read/write path flows |
 | v0.6 | Next | Daemon lifecycle — unix socket, stop/status/watch, graceful drain |
-| v0.7 | Planned | Researcher — curation, cold-start seeding |
-| v0.8 | Planned | Shared experts — cross-project knowledge, multi-pool |
+| v0.7 | Planned | Shared experts — cross-project knowledge, multi-pool |
+| v0.8 | Planned | Researcher — curation, cold-start seeding |
+| v0.9 | Planned | Formulas — workflow templates, operational hardening |
 
 ## License
 
