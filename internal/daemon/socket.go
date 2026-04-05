@@ -1,0 +1,183 @@
+package daemon
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"time"
+)
+
+// socketRequest is the NDJSON request format for CLI→daemon communication.
+type socketRequest struct {
+	Method string `json:"method"`
+}
+
+// socketResponse is the NDJSON response format for daemon→CLI communication.
+type socketResponse struct {
+	Status  string `json:"status"`            // "ok" or "error"
+	Data    any    `json:"data,omitempty"`     // method-specific payload
+	Message string `json:"message,omitempty"` // error description
+}
+
+// socketServer listens on a Unix domain socket for CLI commands.
+type socketServer struct {
+	listener net.Listener
+	logger   *slog.Logger
+	daemon   *Daemon
+	cancel   context.CancelFunc // cancels the daemon's child context (for stop)
+	sockPath string
+}
+
+// newSocketServer creates a socket server at the given path. Removes any stale
+// socket file from a previous crash before listening.
+func newSocketServer(sockPath string, d *Daemon, cancel context.CancelFunc) (*socketServer, error) {
+	// Remove stale socket — if the daemon crashed, the file lingers.
+	if err := os.Remove(sockPath); err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("removing stale socket: %w", err)
+	}
+
+	listener, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, fmt.Errorf("listening on %s: %w", sockPath, err)
+	}
+
+	return &socketServer{
+		listener: listener,
+		logger:   d.logger,
+		daemon:   d,
+		cancel:   cancel,
+		sockPath: sockPath,
+	}, nil
+}
+
+// serve accepts connections until ctx is cancelled. Each connection is handled
+// in its own goroutine.
+func (s *socketServer) serve(ctx context.Context) {
+	go func() {
+		<-ctx.Done()
+		s.listener.Close()
+	}()
+
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			// Expected when listener is closed during shutdown.
+			if ctx.Err() != nil {
+				return
+			}
+			s.logger.Warn("Failed to accept socket connection", "error", err)
+			continue
+		}
+		go s.handleConn(ctx, conn)
+	}
+}
+
+// handleConn reads a single NDJSON request, dispatches by method, writes the
+// response, and closes the connection.
+func (s *socketServer) handleConn(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		return
+	}
+
+	var req socketRequest
+	if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		s.logger.Warn("Failed to parse socket request",
+			"error", err,
+		)
+		s.writeResponse(conn, socketResponse{
+			Status:  "error",
+			Message: "invalid request: " + err.Error(),
+		})
+		return
+	}
+
+	switch req.Method {
+	case "stop":
+		s.logger.Info("Received stop command via socket")
+		s.writeResponse(conn, socketResponse{
+			Status: "ok",
+			Data:   map[string]string{"message": "shutting down"},
+		})
+		s.cancel()
+
+	case "status":
+		s.writeResponse(conn, socketResponse{
+			Status: "ok",
+			Data:   s.daemon.Status(),
+		})
+
+	case "subscribe":
+		s.handleSubscribe(ctx, conn)
+
+	default:
+		s.logger.Warn("Received unknown socket method",
+			"method", req.Method,
+		)
+		s.writeResponse(conn, socketResponse{
+			Status:  "error",
+			Message: fmt.Sprintf("unknown method: %s", req.Method),
+		})
+	}
+}
+
+// handleSubscribe streams events to a client as NDJSON until the client
+// disconnects or the context is cancelled. The connection is NOT closed
+// by handleConn — this method manages the full lifecycle.
+func (s *socketServer) handleSubscribe(ctx context.Context, conn net.Conn) {
+	id, ch := s.daemon.events.subscribe()
+	defer s.daemon.events.unsubscribe(id)
+
+	s.logger.Debug("Preparing to stream events to subscriber",
+		"subscriber_id", id,
+	)
+
+	// Send ack
+	s.writeResponse(conn, socketResponse{
+		Status: "ok",
+		Data:   map[string]string{"message": "subscribed"},
+	})
+
+	// Clear deadline for streaming
+	conn.SetDeadline(time.Time{})
+
+	enc := json.NewEncoder(conn)
+	for {
+		select {
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := enc.Encode(event); err != nil {
+				s.logger.Debug("Subscriber disconnected",
+					"subscriber_id", id,
+				)
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// writeResponse encodes a response as a single JSON line.
+func (s *socketServer) writeResponse(conn net.Conn, resp socketResponse) {
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := json.NewEncoder(conn).Encode(resp); err != nil {
+		s.logger.Debug("Failed to write socket response", "error", err)
+	}
+}
+
+// close shuts down the listener and removes the socket file.
+func (s *socketServer) close() error {
+	s.listener.Close()
+	return os.Remove(s.sockPath)
+}

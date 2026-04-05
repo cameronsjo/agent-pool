@@ -11,12 +11,12 @@ import (
 // Claude Code requires MCP tools to be explicitly allowed in headless mode.
 // Format: mcp__<server-name>__<tool-name>
 var ExpertToolNames = []string{
-	"mcp__agent-pool__pool_read_state",
-	"mcp__agent-pool__pool_update_state",
-	"mcp__agent-pool__pool_append_error",
-	"mcp__agent-pool__pool_send_response",
-	"mcp__agent-pool__pool_recall",
-	"mcp__agent-pool__pool_search_index",
+	"mcp__agent-pool__read_state",
+	"mcp__agent-pool__update_state",
+	"mcp__agent-pool__append_error",
+	"mcp__agent-pool__send_response",
+	"mcp__agent-pool__recall",
+	"mcp__agent-pool__search_index",
 }
 
 // MCPConfig is the JSON structure claude expects for --mcp-config.

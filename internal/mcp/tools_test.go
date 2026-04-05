@@ -3,27 +3,27 @@
 // Each handler is tested by constructing a JSON-RPC tools/call message,
 // sending it through HandleMessage, and inspecting the response.
 //
-// pool_read_state:
+//read_state:
 //   - All state files present → returns JSON with all three fields
 //   - No state files → returns JSON with empty strings
 //
-// pool_update_state:
+//update_state:
 //   - Happy path → state.md written
 //   - Empty content → error result
 //
-// pool_append_error:
+//append_error:
 //   - Happy path → errors.md contains entry
 //   - Empty entry → error result
 //
-// pool_send_response:
+//send_response:
 //   - Happy path → message file appears in postoffice, round-trips through Parse
 //   - Missing required params → error result
 //
-// pool_recall:
+//recall:
 //   - Happy path → returns log content
 //   - Missing log → error result
 //
-// pool_search_index:
+//search_index:
 //   - Happy path → returns matching rows
 //   - No matches → returns "no matching tasks found"
 
@@ -56,7 +56,7 @@ func TestReadState_AllPresent(t *testing.T) {
 	os.WriteFile(filepath.Join(expertDir, "errors.md"), []byte("JWT panics"), 0o644)
 
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
-	result := callTool(t, srv, "pool_read_state", nil)
+	result := callTool(t, srv, "read_state", nil)
 
 	text := resultText(t, result)
 	var data map[string]string
@@ -78,7 +78,7 @@ func TestReadState_AllPresent(t *testing.T) {
 func TestReadState_NoFiles(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
-	result := callTool(t, srv, "pool_read_state", nil)
+	result := callTool(t, srv, "read_state", nil)
 
 	text := resultText(t, result)
 	var data map[string]string
@@ -97,7 +97,7 @@ func TestUpdateState_HappyPath(t *testing.T) {
 	poolDir, expertDir := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_update_state", map[string]any{
+	result := callTool(t, srv, "update_state", map[string]any{
 		"content": "Updated working memory",
 	})
 
@@ -115,7 +115,7 @@ func TestUpdateState_EmptyContent(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_update_state", map[string]any{
+	result := callTool(t, srv, "update_state", map[string]any{
 		"content": "",
 	})
 
@@ -130,7 +130,7 @@ func TestAppendError_HappyPath(t *testing.T) {
 	poolDir, expertDir := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_append_error", map[string]any{
+	result := callTool(t, srv, "append_error", map[string]any{
 		"entry": "Connection timeout to database",
 	})
 
@@ -148,7 +148,7 @@ func TestAppendError_EmptyEntry(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_append_error", map[string]any{
+	result := callTool(t, srv, "append_error", map[string]any{
 		"entry": "",
 	})
 
@@ -163,7 +163,7 @@ func TestSendResponse_HappyPath(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_send_response", map[string]any{
+	result := callTool(t, srv, "send_response", map[string]any{
 		"to":   "architect",
 		"body": "Token endpoint is complete.",
 		"id":   "resp-001",
@@ -198,7 +198,7 @@ func TestSendResponse_MissingTo(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_send_response", map[string]any{
+	result := callTool(t, srv, "send_response", map[string]any{
 		"body": "response body",
 		"id":   "resp-002",
 	})
@@ -212,7 +212,7 @@ func TestSendResponse_PathTraversalID(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_send_response", map[string]any{
+	result := callTool(t, srv, "send_response", map[string]any{
 		"to":   "architect",
 		"body": "response body",
 		"id":   "../../etc/evil",
@@ -234,7 +234,7 @@ func TestRecall_HappyPath(t *testing.T) {
 	)
 
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
-	result := callTool(t, srv, "pool_recall", map[string]any{
+	result := callTool(t, srv, "recall", map[string]any{
 		"task_id": "task-042",
 	})
 
@@ -252,7 +252,7 @@ func TestRecall_MissingLog(t *testing.T) {
 	poolDir, _ := setupExpertPool(t, "auth")
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
 
-	result := callTool(t, srv, "pool_recall", map[string]any{
+	result := callTool(t, srv, "recall", map[string]any{
 		"task_id": "nonexistent",
 	})
 
@@ -273,7 +273,7 @@ func TestSearchIndex_HappyPath(t *testing.T) {
 	os.WriteFile(filepath.Join(expertDir, "logs", "index.md"), []byte(index), 0o644)
 
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
-	result := callTool(t, srv, "pool_search_index", map[string]any{
+	result := callTool(t, srv, "search_index", map[string]any{
 		"query": "OAuth",
 	})
 
@@ -296,7 +296,7 @@ func TestSearchIndex_NoMatches(t *testing.T) {
 	os.WriteFile(filepath.Join(expertDir, "logs", "index.md"), []byte(index), 0o644)
 
 	srv := buildMCPTestServer(t, poolDir, "auth", "")
-	result := callTool(t, srv, "pool_search_index", map[string]any{
+	result := callTool(t, srv, "search_index", map[string]any{
 		"query": "nonexistent",
 	})
 

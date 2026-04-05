@@ -74,10 +74,12 @@ func writePoolConfig(t *testing.T, poolDir, toml string) *config.PoolConfig {
 // startTestDaemon creates a daemon with the given config and spawner, starts it
 // in a background goroutine, and waits for it to be ready. Returns a cancel
 // function and error channel. Call shutdownDaemon(t, cancel, errCh) to stop.
-func startTestDaemon(t *testing.T, cfg *config.PoolConfig, poolDir string, spawner *fakeSpawner) (context.CancelFunc, <-chan error) {
+func startTestDaemon(t *testing.T, cfg *config.PoolConfig, poolDir string, spawner *fakeSpawner, opts ...daemon.Option) (context.CancelFunc, <-chan error) {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(spawner))
+
+	allOpts := append([]daemon.Option{daemon.WithSpawner(spawner)}, opts...)
+	d := daemon.New(cfg, poolDir, logger, allOpts...)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 

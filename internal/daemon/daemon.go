@@ -8,6 +8,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"io"
 
 	"github.com/cameronsjo/agent-pool/internal/approval"
 	"github.com/cameronsjo/agent-pool/internal/config"
@@ -51,6 +50,12 @@ type Daemon struct {
 	board     *taskboard.Board
 	boardPath string
 	draining  map[string]bool // re-entrancy guard for expert inbox drains
+
+	wg           sync.WaitGroup
+	drainTimeout time.Duration // max wait for in-flight goroutines on shutdown (default 30s)
+	startedAt    time.Time
+	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
+	events       *eventBus
 }
 
 // Option configures a Daemon.
@@ -71,6 +76,18 @@ func WithStdout(w io.Writer) Option {
 	return func(d *Daemon) { d.stdout = w }
 }
 
+// WithSocketPath overrides the default socket path ({poolDir}/daemon.sock).
+// Used in tests where TempDir paths exceed the macOS Unix socket limit (104 bytes).
+func WithSocketPath(path string) Option {
+	return func(d *Daemon) { d.sockPathOver = path }
+}
+
+// WithDrainTimeout sets the max wait for in-flight goroutines during shutdown.
+// Default is 30 seconds. Use a shorter value in tests.
+func WithDrainTimeout(d time.Duration) Option {
+	return func(dm *Daemon) { dm.drainTimeout = d }
+}
+
 // New creates a Daemon for the given pool.
 func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Option) *Daemon {
 	boardPath := filepath.Join(poolDir, "taskboard.json")
@@ -85,13 +102,15 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 	}
 
 	d := &Daemon{
-		cfg:       cfg,
-		poolDir:   poolDir,
-		logger:    logger,
-		board:     board,
-		boardPath: boardPath,
-		draining:  make(map[string]bool),
-		spawner:   defaultSpawner{},
+		cfg:          cfg,
+		poolDir:      poolDir,
+		logger:       logger,
+		board:        board,
+		boardPath:    boardPath,
+		draining:     make(map[string]bool),
+		spawner:      defaultSpawner{},
+		drainTimeout: 30 * time.Second,
+		events:       newEventBus(),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -99,11 +118,16 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 	return d
 }
 
-// Run starts the daemon's main loop. It blocks until ctx is cancelled.
+// Run starts the daemon's main loop. It blocks until ctx is cancelled (via
+// signal) or a stop command is received over the socket.
 func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.ensureDirs(); err != nil {
 		return fmt.Errorf("ensuring directory structure: %w", err)
 	}
+
+	// Create a child context so both signals and socket stop converge here.
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	watcher, err := NewWatcher(d.logger)
 	if err != nil {
@@ -137,26 +161,48 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}
 
-	// Start watcher goroutine
-	go watcher.Run(ctx)
+	// Start socket server for CLI→daemon communication
+	sockPath := d.resolveSockPath()
+	sock, err := newSocketServer(sockPath, d, cancel)
+	if err != nil {
+		return fmt.Errorf("starting socket server: %w", err)
+	}
+	defer sock.close()
+	go sock.serve(childCtx)
 
+	// Start watcher goroutine
+	go watcher.Run(childCtx)
+
+	d.startedAt = time.Now()
 	d.logger.Info("Successfully started daemon",
 		"pool", d.cfg.Pool.Name,
 		"pool_dir", d.poolDir,
 		"experts", len(d.cfg.Experts),
+		"socket", sockPath,
 	)
 
 	// Drain pre-existing messages from before the daemon started
-	d.drainPostoffice(ctx)
-	d.drainAllInboxes(ctx)
+	d.drainPostoffice(childCtx)
+	d.drainAllInboxes(childCtx)
 
 	// Main event loop
 	for {
 		select {
-		case <-ctx.Done():
-			d.logger.Info("Shutting down daemon",
+		case <-childCtx.Done():
+			d.logger.Info("Preparing to drain in-flight work",
 				"pool", d.cfg.Pool.Name,
+				"drain_timeout", d.drainTimeout,
 			)
+			done := make(chan struct{})
+			go func() { d.wg.Wait(); close(done) }()
+			select {
+			case <-done:
+				d.logger.Info("Successfully drained all in-flight work")
+			case <-time.After(d.drainTimeout):
+				d.logger.Warn("Skipping drain. Reason: timeout exceeded",
+					"drain_timeout", d.drainTimeout,
+				)
+			}
 			return nil
 
 		case event, ok := <-watcher.Events():
@@ -165,9 +211,10 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 
 			if event.Dir == postofficeDir {
-				d.handlePostoffice(ctx, event.Path)
+				d.handlePostoffice(childCtx, event.Path)
 			} else if event.Dir == approvalsDir {
-				go d.handleApprovalRequest(ctx, event.Path)
+				d.wg.Add(1)
+				go func() { defer d.wg.Done(); d.handleApprovalRequest(childCtx, event.Path) }()
 			} else {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
@@ -176,7 +223,8 @@ func (d *Daemon) Run(ctx context.Context) error {
 					// block postoffice routing or other experts.
 					// The busy flag inside handleInbox prevents
 					// concurrent spawns for the same expert.
-					go d.handleInbox(ctx, expertName, event.Path)
+					d.wg.Add(1)
+					go func() { defer d.wg.Done(); d.handleInbox(childCtx, expertName, event.Path) }()
 				} else {
 					d.logger.Warn("Received event for unknown inbox",
 						"dir", event.Dir,
@@ -221,6 +269,11 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 		"id", routed.ID,
 		"to", routed.To,
 	)
+	d.events.emit(Event{
+		Type:      EventTaskRouted,
+		Timestamp: time.Now(),
+		Data:      TaskRoutedData{ID: routed.ID, From: routed.From, To: routed.To, Type: string(routed.Type)},
+	})
 
 	if routed.Type == mail.TypeTask || routed.Type == mail.TypeQuestion {
 		d.registerTask(routed)
@@ -326,6 +379,11 @@ func (d *Daemon) handleCancel(msg *mail.Message, cancelPath string) {
 			"cancel_id", msg.ID,
 			"target_id", targetID,
 		)
+		d.events.emit(Event{
+			Type:      EventTaskCancelled,
+			Timestamp: time.Now(),
+			Data:      TaskCancelledData{TaskID: targetID},
+		})
 
 	case taskboard.StatusActive:
 		task.CancelNote = "cancel requested while active"
@@ -492,6 +550,12 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	d.mu.Unlock()
 
 	model, tools := d.resolveExpertConfig(expertName)
+
+	d.events.emit(Event{
+		Type:      EventExpertSpawning,
+		Timestamp: time.Now(),
+		Data:      ExpertSpawningData{Expert: expertName, TaskID: msg.ID, Model: model},
+	})
 	projectDir := d.resolveProjectDir()
 	expertDir := d.resolveExpertDir(expertName)
 
@@ -536,12 +600,18 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 
 	timeout, parseErr := d.resolveSessionTimeout(expertName)
 	if parseErr != nil {
-		d.logger.Warn("Failed to parse session timeout, using default 10m",
+		d.logger.Warn("Failed to parse session timeout, running without timeout",
 			"error", parseErr,
 		)
-		timeout = 10 * time.Minute
 	}
-	spawnCtx, spawnCancel := context.WithTimeout(ctx, timeout)
+
+	var spawnCtx context.Context
+	var spawnCancel context.CancelFunc
+	if timeout > 0 {
+		spawnCtx, spawnCancel = context.WithTimeout(ctx, timeout)
+	} else {
+		spawnCtx, spawnCancel = context.WithCancel(ctx)
+	}
 	defer spawnCancel()
 
 	result, err := d.spawner.Spawn(spawnCtx, d.logger, cfg)
@@ -596,6 +666,11 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			"duration", result.Duration,
 			"summary", result.Summary,
 		)
+		d.events.emit(Event{
+			Type:      EventExpertFailed,
+			Timestamp: time.Now(),
+			Data:      ExpertFailedData{Expert: expertName, TaskID: result.TaskID, ExitCode: result.ExitCode},
+		})
 		d.markTaskFailed(msg.ID, result.ExitCode)
 		return true
 	}
@@ -617,6 +692,17 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		"duration", result.Duration,
 		"summary", result.Summary,
 	)
+	d.events.emit(Event{
+		Type:      EventExpertCompleted,
+		Timestamp: time.Now(),
+		Data: ExpertCompletedData{
+			Expert:   expertName,
+			TaskID:   result.TaskID,
+			Duration: result.Duration.String(),
+			ExitCode: result.ExitCode,
+			Summary:  result.Summary,
+		},
+	})
 
 	return true
 }
@@ -693,6 +779,11 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 			if t, ok := d.board.Get(id); ok && !seen[t.Expert] {
 				seen[t.Expert] = true
 				expertsToWake = append(expertsToWake, t.Expert)
+				d.events.emit(Event{
+					Type:      EventTaskUnblocked,
+					Timestamp: time.Now(),
+					Data:      TaskUnblockedData{TaskID: id, Expert: t.Expert},
+				})
 			}
 		}
 	}
@@ -701,7 +792,8 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 
 	// Wake experts outside the lock — handleInbox acquires its own lock
 	for _, expert := range expertsToWake {
-		go d.handleInbox(ctx, expert, "")
+		d.wg.Add(1)
+		go func(e string) { defer d.wg.Done(); d.handleInbox(ctx, e, "") }(expert)
 	}
 }
 
@@ -726,10 +818,12 @@ func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
 // when the daemon starts. Each drains in its own goroutine via handleInbox.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
 	// Drain architect inbox
-	go d.handleInbox(ctx, "architect", "")
+	d.wg.Add(1)
+	go func() { defer d.wg.Done(); d.handleInbox(ctx, "architect", "") }()
 
 	for name := range d.cfg.Experts {
-		go d.handleInbox(ctx, name, "")
+		d.wg.Add(1)
+		go func(n string) { defer d.wg.Done(); d.handleInbox(ctx, n, "") }(name)
 	}
 }
 
@@ -932,6 +1026,43 @@ func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
 	)
 }
 
+// Status returns live daemon state for the socket status method.
+func (d *Daemon) Status() map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	experts := make([]string, 0, len(d.cfg.Experts))
+	for name := range d.cfg.Experts {
+		experts = append(experts, name)
+	}
+	sort.Strings(experts)
+
+	counts := make(map[string]int)
+	var activeTasks []map[string]string
+	for _, task := range d.board.Tasks {
+		counts[string(task.Status)]++
+		if task.Status == taskboard.StatusActive {
+			entry := map[string]string{
+				"id":     task.ID,
+				"expert": task.Expert,
+			}
+			if task.StartedAt != nil {
+				entry["started"] = time.Since(*task.StartedAt).Truncate(time.Second).String()
+			}
+			activeTasks = append(activeTasks, entry)
+		}
+	}
+
+	return map[string]any{
+		"pool":         d.cfg.Pool.Name,
+		"state":        "running",
+		"uptime":       time.Since(d.startedAt).Truncate(time.Second).String(),
+		"experts":      experts,
+		"task_counts":  counts,
+		"active_tasks": activeTasks,
+	}
+}
+
 // resolveSessionTimeout returns the session timeout for the given role or expert.
 // Built-in roles with their own timeout config use that; otherwise falls back to defaults.
 func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
@@ -943,6 +1074,16 @@ func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
 		return dur, nil
 	}
 	return d.cfg.Defaults.ParseSessionTimeout()
+}
+
+// resolveSockPath returns the unix socket path for CLI→daemon communication.
+// Uses the override if set, otherwise delegates to config.ResolveSockPath
+// (shared with the CLI to ensure both sides agree on the path).
+func (d *Daemon) resolveSockPath() string {
+	if d.sockPathOver != "" {
+		return d.sockPathOver
+	}
+	return config.ResolveSockPath(d.poolDir)
 }
 
 // resolveExpertDir returns the state directory for an expert or built-in role.

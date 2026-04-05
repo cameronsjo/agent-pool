@@ -3,22 +3,22 @@
 // RegisterArchitectTools (Classification: INTEGRATION)
 //   [x] Happy: all 4 architect tools + 6 expert tools registered (TestArchitectTools_Registration)
 //
-// pool_define_contract (Classification: FILESYSTEM I/O)
+//define_contract (Classification: FILESYSTEM I/O)
 //   [x] Happy: creates contract file and index (TestDefineContract_Happy)
 //   [x] Error: missing params (TestDefineContract_MissingParams)
 //   [x] Error: fewer than 2 between parties (TestDefineContract_TooFewBetween)
 //
-// pool_send_task (Classification: FILESYSTEM I/O)
+//send_task (Classification: FILESYSTEM I/O)
 //   [x] Happy: message appears in postoffice (TestSendTask_Happy)
 //   [x] Error: missing params (TestSendTask_MissingParams)
 //   [x] Error: path traversal ID (TestSendTask_PathTraversal)
 //
-// pool_verify_result (Classification: FILESYSTEM I/O)
+//verify_result (Classification: FILESYSTEM I/O)
 //   [x] Happy: verification log created (TestVerifyResult_Happy)
 //   [x] Error: invalid status (TestVerifyResult_InvalidStatus)
 //   [x] Error: contract not found (TestVerifyResult_ContractNotFound)
 //
-// pool_amend_contract (Classification: FILESYSTEM I/O)
+//amend_contract (Classification: FILESYSTEM I/O)
 //   [x] Happy: version incremented + notify messages (TestAmendContract_Happy)
 //   [x] Error: contract not found (TestAmendContract_NotFound)
 //
@@ -70,12 +70,12 @@ func TestArchitectTools_Registration(t *testing.T) {
 
 	expected := []string{
 		// Architect tools
-		"pool_define_contract", "pool_send_task",
-		"pool_verify_result", "pool_amend_contract",
+		"define_contract", "send_task",
+		"verify_result", "amend_contract",
 		// Expert tools (inherited)
-		"pool_read_state", "pool_update_state",
-		"pool_append_error", "pool_send_response",
-		"pool_recall", "pool_search_index",
+		"read_state", "update_state",
+		"append_error", "send_response",
+		"recall", "search_index",
 	}
 	for _, name := range expected {
 		if !tools[name] {
@@ -88,7 +88,7 @@ func TestDefineContract_Happy(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_define_contract", map[string]any{
+	result := callTool(t, srv, "define_contract", map[string]any{
 		"id":      "contract-001",
 		"between": "auth, frontend",
 		"body":    "## Token Exchange\n\nSpec goes here.",
@@ -116,7 +116,7 @@ func TestDefineContract_MissingParams(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_define_contract", map[string]any{
+	result := callTool(t, srv, "define_contract", map[string]any{
 		"between": "auth, frontend",
 		"body":    "spec",
 	})
@@ -129,7 +129,7 @@ func TestDefineContract_TooFewBetween(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_define_contract", map[string]any{
+	result := callTool(t, srv, "define_contract", map[string]any{
 		"id":      "c1",
 		"between": "only-one",
 		"body":    "spec",
@@ -144,7 +144,7 @@ func TestSendTask_Happy(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_send_task", map[string]any{
+	result := callTool(t, srv, "send_task", map[string]any{
 		"to":        "auth",
 		"body":      "Implement the token endpoint",
 		"id":        "task-001",
@@ -184,7 +184,7 @@ func TestSendTask_MissingParams(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_send_task", map[string]any{
+	result := callTool(t, srv, "send_task", map[string]any{
 		"to":   "auth",
 		"body": "do something",
 	})
@@ -197,7 +197,7 @@ func TestSendTask_PathTraversal(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_send_task", map[string]any{
+	result := callTool(t, srv, "send_task", map[string]any{
 		"to":   "auth",
 		"body": "do something",
 		"id":   "../escape",
@@ -213,13 +213,13 @@ func TestVerifyResult_Happy(t *testing.T) {
 	srv := buildArchitectTestServer(t, poolDir)
 
 	// Create a contract first
-	callTool(t, srv, "pool_define_contract", map[string]any{
+	callTool(t, srv, "define_contract", map[string]any{
 		"id":      "contract-001",
 		"between": "auth, frontend",
 		"body":    "spec",
 	})
 
-	result := callTool(t, srv, "pool_verify_result", map[string]any{
+	result := callTool(t, srv, "verify_result", map[string]any{
 		"task_id":     "task-001",
 		"contract_id": "contract-001",
 		"status":      "pass",
@@ -242,7 +242,7 @@ func TestVerifyResult_InvalidStatus(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_verify_result", map[string]any{
+	result := callTool(t, srv, "verify_result", map[string]any{
 		"task_id":     "task-001",
 		"contract_id": "contract-001",
 		"status":      "unknown",
@@ -258,7 +258,7 @@ func TestVerifyResult_ContractNotFound(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_verify_result", map[string]any{
+	result := callTool(t, srv, "verify_result", map[string]any{
 		"task_id":     "task-001",
 		"contract_id": "nonexistent",
 		"status":      "pass",
@@ -275,13 +275,13 @@ func TestAmendContract_Happy(t *testing.T) {
 	srv := buildArchitectTestServer(t, poolDir)
 
 	// Create initial contract
-	callTool(t, srv, "pool_define_contract", map[string]any{
+	callTool(t, srv, "define_contract", map[string]any{
 		"id":      "contract-001",
 		"between": "auth, frontend",
 		"body":    "v1 spec",
 	})
 
-	result := callTool(t, srv, "pool_amend_contract", map[string]any{
+	result := callTool(t, srv, "amend_contract", map[string]any{
 		"id":   "contract-001",
 		"body": "## Updated spec v2\n\nNew content.",
 	})
@@ -332,7 +332,7 @@ func TestAmendContract_NotFound(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_amend_contract", map[string]any{
+	result := callTool(t, srv, "amend_contract", map[string]any{
 		"id":   "nonexistent",
 		"body": "new body",
 	})
@@ -352,7 +352,7 @@ func TestSendTask_ApprovalNoneMode(t *testing.T) {
 	// approval_mode = "none" (set in setupArchitectPool via buildArchitectTestServer)
 	srv := buildArchitectTestServer(t, poolDir)
 
-	result := callTool(t, srv, "pool_send_task", map[string]any{
+	result := callTool(t, srv, "send_task", map[string]any{
 		"to":   "auth",
 		"body": "do something",
 		"id":   "task-none-001",
@@ -402,7 +402,7 @@ func TestSendTask_ApprovalRequired(t *testing.T) {
 	// Call pool_send_task in a goroutine (it blocks on approval)
 	resultCh := make(chan *mcp.CallToolResult, 1)
 	go func() {
-		r := callTool(t, srv, "pool_send_task", map[string]any{
+		r := callTool(t, srv, "send_task", map[string]any{
 			"to":   "auth",
 			"body": "implement token endpoint",
 			"id":   "task-approval-001",
@@ -477,7 +477,7 @@ func TestSendTask_ApprovalRejected(t *testing.T) {
 
 	resultCh := make(chan *mcp.CallToolResult, 1)
 	go func() {
-		r := callTool(t, srv, "pool_send_task", map[string]any{
+		r := callTool(t, srv, "send_task", map[string]any{
 			"to":   "auth",
 			"body": "implement auth",
 			"id":   "task-rejected-001",

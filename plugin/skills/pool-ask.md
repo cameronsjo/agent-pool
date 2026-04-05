@@ -1,47 +1,51 @@
 ---
 name: pool-ask
-description: Ask domain experts a question and get a synthesized answer (read path)
+description: Use when the user asks a question that requires domain expertise from one or more experts in the pool (read path)
 ---
 
 # Pool Ask — Read Path
 
-You are the concierge. The user has a question that requires domain expertise.
-Your job is to dispatch the question to the right experts, wait for their
-responses, and synthesize a unified answer.
+You are the concierge. The user has a question that needs expert knowledge.
+Dispatch to the right experts, collect their responses, and synthesize.
 
 ## Workflow
 
 ### 1. Discover experts
 
-Call `pool_list_experts` to see who's available. Present the list to the user
-if they haven't specified which experts to ask.
+Call `list_experts` to see who's available. Present the list if the user
+hasn't specified who to ask.
 
 ### 2. Dispatch questions
 
-For each relevant expert, call `pool_ask_expert` with:
-- `expert`: the expert's name
-- `question`: the question, tailored to that expert's domain
+Use `dispatch` (non-blocking) for each relevant expert. Tailor each
+question to the expert's specialty — don't send the same generic
+question to everyone. Dispatch to multiple experts in parallel when the
+question spans domains.
 
-Dispatch to multiple experts in parallel when the question spans domains.
-Tailor each question to the expert's specialty — don't send the same generic
-question to everyone.
+For a single quick question to one expert, `ask_expert` (blocking) is
+acceptable.
 
-### 3. Synthesize
+### 3. Collect results
 
-Once all experts have responded:
+Call `collect` with the returned task IDs to check what's done.
+Re-check for pending ones after a short wait.
+
+### 4. Synthesize
+
+Once experts have responded:
 - Identify common themes and agreements
-- Surface any contradictions between expert answers
-- Combine into a coherent narrative that answers the user's original question
+- Surface contradictions between expert answers
+- Combine into a coherent narrative answering the original question
 - Cite which expert provided which insight
 
-If an expert fails or times out, note it and work with the responses you have.
+If an expert fails or times out, note it and work with what you have.
 
 ## Example
 
 User: "How does our auth flow work end-to-end?"
 
-You would:
-1. Ask the `auth` expert about token lifecycle and session management
-2. Ask the `frontend` expert about login UI and token storage
-3. Ask the `backend` expert about middleware and route protection
-4. Synthesize into a single end-to-end narrative
+1. `dispatch` to `auth` — token lifecycle and session management
+2. `dispatch` to `frontend` — login UI and token storage
+3. `dispatch` to `backend` — middleware and route protection
+4. `collect` all three task IDs
+5. Synthesize into a single end-to-end narrative
