@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+
+	"github.com/cameronsjo/agent-pool/internal/config"
 )
 
 // builtinRoles are roles with top-level directories (not under experts/).
@@ -44,6 +46,24 @@ func ResolveInbox(poolDir, recipient string) string {
 		return filepath.Join(poolDir, recipient, "inbox")
 	}
 	return filepath.Join(poolDir, "experts", recipient, "inbox")
+}
+
+// ResolveSharedExpertDir returns the user-level state directory for a shared
+// expert: ~/.agent-pool/experts/{name}/. Delegates validation to config.SharedExpertDir.
+func ResolveSharedExpertDir(name string) (string, error) {
+	return config.SharedExpertDir(name)
+}
+
+// ResolveSharedInbox returns the pool-scoped inbox for a shared expert:
+// {poolDir}/shared-state/{name}/inbox/.
+func ResolveSharedInbox(poolDir, name string) string {
+	return filepath.Join(poolDir, "shared-state", name, "inbox")
+}
+
+// ResolveSharedLogDir returns the pool-scoped log directory for a shared expert:
+// {poolDir}/shared-state/{name}/logs/.
+func ResolveSharedLogDir(poolDir, name string) string {
+	return filepath.Join(poolDir, "shared-state", name, "logs")
 }
 
 // Route parses a message from the postoffice, copies it to the recipient's
