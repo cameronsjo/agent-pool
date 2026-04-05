@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cameronsjo/agent-pool/internal/atomicfile"
 	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
 // postMessage composes a mail message and writes it to the pool's postoffice.
-// Creates the postoffice directory if it doesn't exist.
+// Creates the postoffice directory if it doesn't exist. Uses atomic writes
+// to prevent partial files from being picked up by the daemon's watcher.
 func postMessage(poolDir string, msg *mail.Message) error {
 	composed, err := mail.Compose(msg)
 	if err != nil {
@@ -22,7 +24,7 @@ func postMessage(poolDir string, msg *mail.Message) error {
 	}
 
 	path := filepath.Join(postoffice, msg.ID+".md")
-	if err := os.WriteFile(path, []byte(composed), 0o644); err != nil {
+	if err := atomicfile.WriteFile(path, []byte(composed)); err != nil {
 		return fmt.Errorf("writing to postoffice: %w", err)
 	}
 

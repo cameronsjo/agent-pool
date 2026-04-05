@@ -37,5 +37,10 @@ func WriteFile(path string, data []byte) error {
 		return fmt.Errorf("renaming: %w", err)
 	}
 
+	// CreateTemp uses 0600; match the 0644 convention used by os.WriteFile
+	if err := os.Chmod(path, 0o644); err != nil {
+		return fmt.Errorf("setting permissions: %w", err)
+	}
+
 	return nil
 }

@@ -118,7 +118,10 @@ func resultText(t *testing.T, result *mcp.CallToolResult) string {
 	}
 
 	for _, c := range result.Content {
-		data, _ := json.Marshal(c)
+		data, err := json.Marshal(c)
+		if err != nil {
+			t.Fatalf("marshaling content item: %v", err)
+		}
 		var tc struct {
 			Type string `json:"type"`
 			Text string `json:"text"`

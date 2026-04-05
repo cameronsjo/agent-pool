@@ -61,7 +61,9 @@ import (
 func writePoolConfig(t *testing.T, poolDir, toml string) *config.PoolConfig {
 	t.Helper()
 	toml = strings.ReplaceAll(toml, "PROJECT_DIR", poolDir)
-	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(toml), 0o644)
+	if err := os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("writing pool.toml: %v", err)
+	}
 	cfg, err := config.LoadPool(poolDir)
 	if err != nil {
 		t.Fatalf("LoadPool: %v", err)
@@ -82,6 +84,8 @@ func startTestDaemon(t *testing.T, cfg *config.PoolConfig, poolDir string, spawn
 	errCh := make(chan error, 1)
 	go func() { errCh <- d.Run(ctx) }()
 
+	// daemon.Run doesn't expose a readiness signal; sleep lets the watcher
+	// start and pre-existing messages drain before the test writes new ones.
 	time.Sleep(500 * time.Millisecond)
 	return cancel, errCh
 }
