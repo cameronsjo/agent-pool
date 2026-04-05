@@ -59,7 +59,7 @@ func (g *Gate) Request(ctx context.Context, proposalID, proposal string) error {
 		return fmt.Errorf("creating approvals dir: %w", err)
 	}
 
-	logger.Debug("Preparing to submit approval request",
+	logger.Info("Preparing to submit approval request",
 		"proposal_id", proposalID,
 	)
 

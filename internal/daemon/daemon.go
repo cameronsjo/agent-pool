@@ -404,7 +404,7 @@ func (d *Daemon) handleInbox(ctx context.Context, expertName string, _ string) {
 	d.mu.Lock()
 	if d.draining[expertName] {
 		d.mu.Unlock()
-		d.logger.Debug("Skipping expert dispatch. Reason: expert busy",
+		d.logger.Info("Skipping expert dispatch. Reason: expert busy",
 			"expert", expertName,
 		)
 		return
@@ -454,14 +454,14 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		switch task.Status {
 		case taskboard.StatusBlocked:
 			d.mu.Unlock()
-			d.logger.Debug("Skipping task. Reason: blocked on dependencies",
+			d.logger.Info("Skipping task. Reason: blocked on dependencies",
 				"expert", expertName,
 				"task_id", msg.ID,
 			)
 			return false
 		case taskboard.StatusCancelled:
 			d.mu.Unlock()
-			d.logger.Debug("Skipping task. Reason: task was cancelled",
+			d.logger.Info("Skipping task. Reason: task was cancelled",
 				"expert", expertName,
 				"task_id", msg.ID,
 			)
@@ -469,7 +469,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 			return true
 		case taskboard.StatusCompleted, taskboard.StatusFailed:
 			d.mu.Unlock()
-			d.logger.Debug("Skipping task. Reason: task already reached terminal status",
+			d.logger.Info("Skipping task. Reason: task already reached terminal status",
 				"expert", expertName,
 				"task_id", msg.ID,
 				"status", task.Status,
@@ -484,7 +484,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		task.StartedAt = &now
 		d.board.Save(d.boardPath)
 
-		d.logger.Debug("Preparing to run task",
+		d.logger.Info("Preparing to run task",
 			"expert", expertName,
 			"task_id", msg.ID,
 		)

@@ -83,7 +83,7 @@ func handleAskExpert(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		id := fmt.Sprintf("cq-%s-%d", expertName, time.Now().UnixNano())
 
-		cfg.Logger.Debug("Preparing to dispatch question",
+		cfg.Logger.Info("Preparing to dispatch question",
 			"id", id,
 			"expert", expertName,
 		)
@@ -228,7 +228,7 @@ func handleSubmitPlan(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		id := fmt.Sprintf("cp-%d", time.Now().UnixNano())
 
-		cfg.Logger.Debug("Preparing to submit plan to architect",
+		cfg.Logger.Info("Preparing to submit plan to architect",
 			"id", id,
 			"contract_count", len(contracts),
 		)

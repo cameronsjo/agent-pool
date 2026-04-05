@@ -160,7 +160,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	logger.Debug("Preparing to spawn expert session",
+	logger.Info("Preparing to spawn expert session",
 		"expert", cfg.Name,
 		"task_id", cfg.TaskMessage.ID,
 		"model", cfg.Model,
@@ -200,7 +200,7 @@ func Spawn(ctx context.Context, logger *slog.Logger, cfg *SpawnConfig) (*Result,
 		// Grace period for Stop hook to flush state
 		select {
 		case runErr = <-done:
-			logger.Debug("Expert process exited after SIGTERM",
+			logger.Info("Expert process exited after SIGTERM",
 				"expert", cfg.Name,
 				"task_id", cfg.TaskMessage.ID,
 				"pid", pid,

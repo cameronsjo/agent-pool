@@ -39,7 +39,7 @@ func (s *Store) Save(c *Contract) error {
 		return fmt.Errorf("contract is nil")
 	}
 
-	s.logger.Debug("Preparing to save contract",
+	s.logger.Info("Preparing to save contract",
 		"contract_id", c.ID,
 		"version", c.Version,
 		"between", c.Between,
@@ -81,7 +81,7 @@ func (s *Store) Save(c *Contract) error {
 // Amend loads an existing contract, increments its version, updates the body
 // and timestamp, saves it, and returns the updated contract.
 func (s *Store) Amend(id string, newBody string) (*Contract, error) {
-	s.logger.Debug("Preparing to amend contract",
+	s.logger.Info("Preparing to amend contract",
 		"contract_id", id,
 	)
 

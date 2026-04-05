@@ -37,7 +37,7 @@ func Guard(logger *slog.Logger, cfg *GuardConfig) error {
 		return fmt.Errorf("invalid expert name %q: must not contain path separators", cfg.ExpertName)
 	}
 
-	logger.Debug("Allowing file access",
+	logger.Info("Allowing file access",
 		"expert", cfg.ExpertName,
 		"path", cfg.FilePath,
 	)
