@@ -8,6 +8,8 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -15,8 +17,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"io"
 
 	"github.com/cameronsjo/agent-pool/internal/approval"
 	"github.com/cameronsjo/agent-pool/internal/config"
@@ -51,6 +51,9 @@ type Daemon struct {
 	board     *taskboard.Board
 	boardPath string
 	draining  map[string]bool // re-entrancy guard for expert inbox drains
+
+	startedAt    time.Time
+	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 }
 
 // Option configures a Daemon.
@@ -69,6 +72,12 @@ func WithStdin(r io.Reader) Option {
 // WithStdout sets a custom stdout writer for approval output (used in tests).
 func WithStdout(w io.Writer) Option {
 	return func(d *Daemon) { d.stdout = w }
+}
+
+// WithSocketPath overrides the default socket path ({poolDir}/daemon.sock).
+// Used in tests where TempDir paths exceed the macOS Unix socket limit (104 bytes).
+func WithSocketPath(path string) Option {
+	return func(d *Daemon) { d.sockPathOver = path }
 }
 
 // New creates a Daemon for the given pool.
@@ -99,11 +108,16 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 	return d
 }
 
-// Run starts the daemon's main loop. It blocks until ctx is cancelled.
+// Run starts the daemon's main loop. It blocks until ctx is cancelled (via
+// signal) or a stop command is received over the socket.
 func (d *Daemon) Run(ctx context.Context) error {
 	if err := d.ensureDirs(); err != nil {
 		return fmt.Errorf("ensuring directory structure: %w", err)
 	}
+
+	// Create a child context so both signals and socket stop converge here.
+	childCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
 
 	watcher, err := NewWatcher(d.logger)
 	if err != nil {
@@ -137,23 +151,34 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}
 	}
 
-	// Start watcher goroutine
-	go watcher.Run(ctx)
+	// Start socket server for CLI→daemon communication
+	sockPath := d.resolveSockPath()
+	sock, err := newSocketServer(sockPath, d, cancel)
+	if err != nil {
+		return fmt.Errorf("starting socket server: %w", err)
+	}
+	defer sock.close()
+	go sock.serve(childCtx)
 
+	// Start watcher goroutine
+	go watcher.Run(childCtx)
+
+	d.startedAt = time.Now()
 	d.logger.Info("Successfully started daemon",
 		"pool", d.cfg.Pool.Name,
 		"pool_dir", d.poolDir,
 		"experts", len(d.cfg.Experts),
+		"socket", sockPath,
 	)
 
 	// Drain pre-existing messages from before the daemon started
-	d.drainPostoffice(ctx)
-	d.drainAllInboxes(ctx)
+	d.drainPostoffice(childCtx)
+	d.drainAllInboxes(childCtx)
 
 	// Main event loop
 	for {
 		select {
-		case <-ctx.Done():
+		case <-childCtx.Done():
 			d.logger.Info("Shutting down daemon",
 				"pool", d.cfg.Pool.Name,
 			)
@@ -165,9 +190,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 
 			if event.Dir == postofficeDir {
-				d.handlePostoffice(ctx, event.Path)
+				d.handlePostoffice(childCtx, event.Path)
 			} else if event.Dir == approvalsDir {
-				go d.handleApprovalRequest(ctx, event.Path)
+				go d.handleApprovalRequest(childCtx, event.Path)
 			} else {
 				// Determine which expert this inbox belongs to
 				expertName := d.resolveExpertName(event.Dir)
@@ -176,7 +201,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 					// block postoffice routing or other experts.
 					// The busy flag inside handleInbox prevents
 					// concurrent spawns for the same expert.
-					go d.handleInbox(ctx, expertName, event.Path)
+					go d.handleInbox(childCtx, expertName, event.Path)
 				} else {
 					d.logger.Warn("Received event for unknown inbox",
 						"dir", event.Dir,
@@ -932,6 +957,31 @@ func (d *Daemon) handleApprovalRequest(ctx context.Context, path string) {
 	)
 }
 
+// Status returns live daemon state for the socket status method.
+func (d *Daemon) Status() map[string]any {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	experts := make([]string, 0, len(d.cfg.Experts))
+	for name := range d.cfg.Experts {
+		experts = append(experts, name)
+	}
+	sort.Strings(experts)
+
+	counts := make(map[string]int)
+	for _, task := range d.board.Tasks {
+		counts[string(task.Status)]++
+	}
+
+	return map[string]any{
+		"pool":        d.cfg.Pool.Name,
+		"state":       "running",
+		"uptime":      time.Since(d.startedAt).Truncate(time.Second).String(),
+		"experts":     experts,
+		"task_counts": counts,
+	}
+}
+
 // resolveSessionTimeout returns the session timeout for the given role or expert.
 // Built-in roles with their own timeout config use that; otherwise falls back to defaults.
 func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
@@ -943,6 +993,23 @@ func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
 		return dur, nil
 	}
 	return d.cfg.Defaults.ParseSessionTimeout()
+}
+
+// resolveSockPath returns the unix socket path for CLI→daemon communication.
+// Uses the override if set, otherwise defaults to {poolDir}/daemon.sock.
+// Falls back to a hashed path under os.TempDir() when the default would exceed
+// the macOS Unix socket path limit (104 bytes).
+func (d *Daemon) resolveSockPath() string {
+	if d.sockPathOver != "" {
+		return d.sockPathOver
+	}
+	candidate := filepath.Join(d.poolDir, "daemon.sock")
+	if len(candidate) <= 100 {
+		return candidate
+	}
+	h := fnv.New32a()
+	h.Write([]byte(d.poolDir))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ap-%x.sock", h.Sum32()))
 }
 
 // resolveExpertDir returns the state directory for an expert or built-in role.

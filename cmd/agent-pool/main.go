@@ -1,14 +1,18 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/cameronsjo/agent-pool/internal/config"
 	"github.com/cameronsjo/agent-pool/internal/daemon"
@@ -25,6 +29,10 @@ func main() {
 	switch os.Args[1] {
 	case "start":
 		cmdStart()
+	case "stop":
+		cmdStop()
+	case "status":
+		cmdStatus()
 	case "mcp":
 		cmdMCP()
 	case "flush":
@@ -32,7 +40,7 @@ func main() {
 	case "guard":
 		cmdGuard()
 	case "version":
-		fmt.Println("agent-pool v0.5.0-dev")
+		fmt.Println("agent-pool v0.6.0-dev")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -91,6 +99,97 @@ func cmdStart() {
 		logger.Error("Daemon failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+func cmdStop() {
+	explicit := ""
+	if len(os.Args) > 2 {
+		explicit = os.Args[2]
+	}
+
+	poolDir, err := config.DiscoverPoolDir(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := connectAndSend(filepath.Join(poolDir, "daemon.sock"), "stop")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if resp.Status != "ok" {
+		fmt.Fprintf(os.Stderr, "error: %s\n", resp.Message)
+		os.Exit(1)
+	}
+
+	fmt.Println("Daemon is shutting down.")
+}
+
+func cmdStatus() {
+	explicit := ""
+	if len(os.Args) > 2 {
+		explicit = os.Args[2]
+	}
+
+	poolDir, err := config.DiscoverPoolDir(explicit)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	resp, err := connectAndSend(filepath.Join(poolDir, "daemon.sock"), "status")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if resp.Status != "ok" {
+		fmt.Fprintf(os.Stderr, "error: %s\n", resp.Message)
+		os.Exit(1)
+	}
+
+	data, _ := json.MarshalIndent(resp.Data, "", "  ")
+	fmt.Println(string(data))
+}
+
+// socketResponse mirrors the daemon's response type for CLI deserialization.
+type socketResponse struct {
+	Status  string          `json:"status"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Message string          `json:"message,omitempty"`
+}
+
+// connectAndSend dials the daemon socket, sends a method request, and reads the response.
+func connectAndSend(sockPath, method string) (*socketResponse, error) {
+	conn, err := net.DialTimeout("unix", sockPath, 5*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to daemon (is it running?): %w", err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	req := map[string]string{"method": method}
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		return nil, fmt.Errorf("sending request: %w", err)
+	}
+
+	scanner := bufio.NewScanner(conn)
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("reading response: %w", err)
+		}
+		return nil, fmt.Errorf("no response from daemon")
+	}
+
+	var resp socketResponse
+	if err := json.Unmarshal(scanner.Bytes(), &resp); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+
+	return &resp, nil
 }
 
 // cmdMCP starts the stdio MCP server. Stdout is the MCP transport; logs go to stderr.
@@ -229,6 +328,8 @@ func printUsage() {
 
 Usage:
   agent-pool start [pool-dir]                          Start the daemon for a pool
+  agent-pool stop [pool-dir]                           Stop a running daemon
+  agent-pool status [pool-dir]                         Show daemon status
   agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
   agent-pool mcp --pool <dir> --role <role>            Start built-in role MCP server
   agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state
@@ -243,5 +344,7 @@ Roles:
 
 Examples:
   agent-pool start ~/.agent-pool/pools/api-gateway
+  agent-pool stop
+  agent-pool status
   agent-pool mcp --pool ./my-pool --role concierge`)
 }
