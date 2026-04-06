@@ -293,14 +293,16 @@ model = "sonnet"
 func TestDaemon_SharedExpertSpawnConfig(t *testing.T) {
 	// Set HOME to a temp dir so SharedExpertDir resolves to a controlled location
 	fakeHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", fakeHome)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("HOME", fakeHome)
 
 	// Create the user-level shared expert directory
 	sharedExpertDir := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards")
-	os.MkdirAll(sharedExpertDir, 0o755)
-	os.WriteFile(filepath.Join(sharedExpertDir, "identity.md"), []byte("I am the security expert."), 0o644)
+	if err := os.MkdirAll(sharedExpertDir, 0o755); err != nil {
+		t.Fatalf("creating shared expert dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedExpertDir, "identity.md"), []byte("I am the security expert."), 0o644); err != nil {
+		t.Fatalf("writing identity.md: %v", err)
+	}
 
 	poolDir := t.TempDir()
 	cfg := writePoolConfig(t, poolDir, `[pool]

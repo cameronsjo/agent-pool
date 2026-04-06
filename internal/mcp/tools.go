@@ -18,16 +18,15 @@ import (
 
 // resolveExpertDirForMCP returns the state directory for the expert.
 // Shared experts resolve to the user-level dir; pool-scoped experts use the pool dir.
-func resolveExpertDirForMCP(cfg *ServerConfig) string {
+func resolveExpertDirForMCP(cfg *ServerConfig) (string, error) {
 	if cfg.IsShared {
 		dir, err := mail.ResolveSharedExpertDir(cfg.ExpertName)
 		if err != nil {
-			// Fallback to pool-scoped path if user-level resolution fails
-			return mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+			return "", fmt.Errorf("resolving shared expert dir for %q: %w", cfg.ExpertName, err)
 		}
-		return dir
+		return dir, nil
 	}
-	return mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+	return mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName), nil
 }
 
 // RegisterExpertTools adds all expert-scope tools to the MCP server.
@@ -35,7 +34,14 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	if cfg == nil {
 		return
 	}
-	expertDir := resolveExpertDirForMCP(cfg)
+	expertDir, err := resolveExpertDirForMCP(cfg)
+	if err != nil {
+		cfg.Logger.Error("Failed to resolve expert directory, tools will not function correctly",
+			"expert", cfg.ExpertName,
+			"error", err,
+		)
+		return
+	}
 
 	srv.AddTool(
 		mcp.NewTool("read_state",
@@ -155,6 +161,9 @@ func handleUpdateState(expertDir string, cfg *ServerConfig) server.ToolHandlerFu
 			}
 			return mcp.NewToolResultText("user-level state.md updated"), nil
 		case "project":
+			if cfg.SharedOverlayDir == "" {
+				return mcp.NewToolResultError("shared expert has no project overlay directory configured"), nil
+			}
 			if err := expert.WriteState(cfg.SharedOverlayDir, content); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("writing state: %v", err)), nil
 			}

@@ -10,23 +10,16 @@ import (
 	"github.com/cameronsjo/agent-pool/internal/config"
 )
 
-// builtinRoles are roles with top-level directories (not under experts/).
-var builtinRoles = map[string]bool{
-	"architect":  true,
-	"researcher": true,
-	"concierge":  true,
-}
-
 // IsBuiltinRole reports whether the given name is a built-in role (architect,
 // researcher, concierge) rather than a pool-scoped expert.
 func IsBuiltinRole(name string) bool {
-	return builtinRoles[name]
+	return config.BuiltinRoleNames[name]
 }
 
 // ResolveExpertDir returns the state directory for an expert or built-in role.
 // Built-in roles use {poolDir}/{role}/, experts use {poolDir}/experts/{name}/.
 func ResolveExpertDir(poolDir, name string) string {
-	if builtinRoles[name] {
+	if config.BuiltinRoleNames[name] {
 		return filepath.Join(poolDir, name)
 	}
 	return filepath.Join(poolDir, "experts", name)
@@ -42,7 +35,7 @@ func ResolveExpertDir(poolDir, name string) string {
 //
 //	{poolDir}/experts/{name}/inbox/
 func ResolveInbox(poolDir, recipient string) string {
-	if builtinRoles[recipient] {
+	if config.BuiltinRoleNames[recipient] {
 		return filepath.Join(poolDir, recipient, "inbox")
 	}
 	return filepath.Join(poolDir, "experts", recipient, "inbox")

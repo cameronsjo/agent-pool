@@ -79,9 +79,9 @@ type ExpertSection struct {
 	AllowedTools []string `toml:"allowed_tools"`
 }
 
-// builtinRoleNames are the built-in role names that shared experts must not
-// conflict with. Kept in sync with mail.builtinRoles.
-var builtinRoleNames = map[string]bool{
+// BuiltinRoleNames is the canonical set of built-in role names. The mail
+// package uses this via IsBuiltinRole to avoid duplicating the list.
+var BuiltinRoleNames = map[string]bool{
 	"architect":  true,
 	"researcher": true,
 	"concierge":  true,
@@ -95,7 +95,7 @@ func (c *PoolConfig) Validate() error {
 		if name == "" || name != filepath.Base(name) || name == "." || name == ".." {
 			return fmt.Errorf("invalid shared expert name %q: must be a simple filename", name)
 		}
-		if builtinRoleNames[name] {
+		if BuiltinRoleNames[name] {
 			return fmt.Errorf("shared expert %q conflicts with built-in role", name)
 		}
 		if c.Experts != nil {

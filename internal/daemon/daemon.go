@@ -56,6 +56,7 @@ type Daemon struct {
 	startedAt    time.Time
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 	events       *eventBus
+	sharedSet    map[string]bool // cached shared.include lookup set, built once in New
 }
 
 // Option configures a Daemon.
@@ -112,6 +113,15 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 		drainTimeout: 30 * time.Second,
 		events:       newEventBus(),
 	}
+
+	// Build cached shared expert lookup set
+	if len(cfg.Shared.Include) > 0 {
+		d.sharedSet = make(map[string]bool, len(cfg.Shared.Include))
+		for _, name := range cfg.Shared.Include {
+			d.sharedSet[name] = true
+		}
+	}
+
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -1233,26 +1243,14 @@ func (d *Daemon) ensureDirs() error {
 	return nil
 }
 
-// sharedNamesMap returns the shared.include list as a set for O(1) lookup.
+// sharedNamesMap returns the cached shared expert lookup set. May be nil.
 func (d *Daemon) sharedNamesMap() map[string]bool {
-	if len(d.cfg.Shared.Include) == 0 {
-		return nil
-	}
-	m := make(map[string]bool, len(d.cfg.Shared.Include))
-	for _, name := range d.cfg.Shared.Include {
-		m[name] = true
-	}
-	return m
+	return d.sharedSet
 }
 
 // isSharedExpert reports whether the named expert is in the pool's shared.include list.
 func (d *Daemon) isSharedExpert(name string) bool {
-	for _, shared := range d.cfg.Shared.Include {
-		if shared == name {
-			return true
-		}
-	}
-	return false
+	return d.sharedSet[name]
 }
 
 // absEqual compares two paths after resolving to absolute form.

@@ -356,13 +356,13 @@ func TestUpdateState_SharedExpert_ProjectScope(t *testing.T) {
 func TestUpdateState_SharedExpert_UserScope(t *testing.T) {
 	// Set HOME to a temp dir so ResolveSharedExpertDir resolves to a controlled path
 	fakeHome := t.TempDir()
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", fakeHome)
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	t.Setenv("HOME", fakeHome)
 
 	// Create the user-level shared expert directory
 	userExpertDir := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards")
-	os.MkdirAll(userExpertDir, 0o755)
+	if err := os.MkdirAll(userExpertDir, 0o755); err != nil {
+		t.Fatalf("creating shared expert dir: %v", err)
+	}
 
 	poolDir, _, overlayDir := setupSharedExpertPool(t)
 	srv := buildSharedMCPTestServer(t, poolDir, "security-standards", overlayDir)
