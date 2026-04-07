@@ -31,24 +31,18 @@ Four roles coordinate the work:
 make build
 ln -sf $(pwd)/bin/agent-pool ~/bin/agent-pool
 
-# Create a pool inside your project
+# Initialize a pool in your project
 cd ~/Projects/my-project
-mkdir -p .agent-pool
+agent-pool init
 
-# Configure
-cat > .agent-pool/pool.toml << 'EOF'
-[pool]
-name = "my-project"
-project_dir = "~/Projects/my-project"
-
-[architect]
-model = "opus"
+# Add experts to .agent-pool/pool.toml
+cat >> .agent-pool/pool.toml << 'EOF'
 
 [experts.backend]
 model = "sonnet"
 EOF
 
-# Start the daemon (auto-discovers .agent-pool/ from cwd)
+# Start the daemon
 agent-pool start
 
 # Check daemon status

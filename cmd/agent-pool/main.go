@@ -30,6 +30,8 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "init":
+		cmdInit()
 	case "start":
 		cmdStart()
 	case "stop":
@@ -47,7 +49,7 @@ func main() {
 	case "seed":
 		cmdSeed()
 	case "version":
-		fmt.Println("agent-pool v0.6.0-dev")
+		fmt.Println("agent-pool v0.9.0")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -55,6 +57,78 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func cmdInit() {
+	poolDir := ".agent-pool"
+	if len(os.Args) > 2 {
+		poolDir = os.Args[2]
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	poolName := filepath.Base(cwd)
+	if err := initPool(poolDir, poolName, cwd); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Initialized pool %q in %s\n", poolName, poolDir)
+	fmt.Println()
+	tomlPath := filepath.Join(poolDir, "pool.toml")
+	fmt.Println("Next steps:")
+	fmt.Printf("  1. Add experts to %s:\n", tomlPath)
+	fmt.Println("     [experts.backend]")
+	fmt.Println("     model = \"sonnet\"")
+	fmt.Println()
+	fmt.Println("  2. Start the daemon:")
+	fmt.Println("     agent-pool start")
+}
+
+// initPool creates the pool directory structure and writes a minimal pool.toml.
+func initPool(poolDir, poolName, projectDir string) error {
+	tomlPath := filepath.Join(poolDir, "pool.toml")
+	if _, err := os.Stat(tomlPath); err == nil {
+		return fmt.Errorf("%s already exists", tomlPath)
+	}
+
+	dirs := []string{
+		filepath.Join(poolDir, "postoffice"),
+		filepath.Join(poolDir, "contracts"),
+		filepath.Join(poolDir, "formulas"),
+		filepath.Join(poolDir, "architect", "inbox"),
+		filepath.Join(poolDir, "architect", "logs"),
+		filepath.Join(poolDir, "researcher", "inbox"),
+		filepath.Join(poolDir, "researcher", "logs"),
+		filepath.Join(poolDir, "concierge", "inbox"),
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+
+	toml := fmt.Sprintf(`[pool]
+name = %q
+project_dir = %q
+
+[architect]
+model = "opus"
+
+[defaults]
+model = "sonnet"
+`, poolName, projectDir)
+
+	if err := os.WriteFile(tomlPath, []byte(toml), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", tomlPath, err)
+	}
+
+	return nil
 }
 
 func cmdStart() {
@@ -661,6 +735,7 @@ func printUsage() {
 	fmt.Println(`agent-pool — process supervisor for Claude Code expert sessions
 
 Usage:
+  agent-pool init [pool-dir]                           Initialize a new pool (default: .agent-pool/)
   agent-pool start [pool-dir]                          Start the daemon for a pool
   agent-pool stop [pool-dir]                           Stop a running daemon
   agent-pool status [pool-dir]                         Show daemon status
