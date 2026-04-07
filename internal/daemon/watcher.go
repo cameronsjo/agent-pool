@@ -12,10 +12,21 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// EventKind distinguishes the type of file event.
+type EventKind int
+
+const (
+	// EventKindMail is a new .md file (mail delivery).
+	EventKindMail EventKind = iota
+	// EventKindConfig is a .toml file write (config change).
+	EventKindConfig
+)
+
 // WatcherEvent carries a validated file event.
 type WatcherEvent struct {
-	Path string // full path to the new file
-	Dir  string // which watched directory this came from
+	Path string    // full path to the new file
+	Dir  string    // which watched directory this came from
+	Kind EventKind // mail or config
 }
 
 // Watcher watches directories for new .md files and emits events
@@ -64,8 +75,11 @@ func (w *Watcher) Events() <-chan WatcherEvent {
 }
 
 // Run processes raw fsnotify events until ctx is cancelled.
-// It filters for Create events on .md files and applies a partial-write
-// stability check before emitting on the Events channel.
+// It handles two kinds of events:
+//   - Create events on .md files (mail delivery) → EventKindMail
+//   - Write events on .toml files (config changes) → EventKindConfig
+//
+// Both kinds apply a partial-write stability check before emitting.
 func (w *Watcher) Run(ctx context.Context) {
 	defer close(w.events)
 
@@ -79,34 +93,50 @@ func (w *Watcher) Run(ctx context.Context) {
 				return
 			}
 
-			if !event.Has(fsnotify.Create) {
-				continue
-			}
-
-			if !strings.HasSuffix(event.Name, ".md") {
-				continue
-			}
-
-			// Skip temp files from our own atomic writes
 			base := filepath.Base(event.Name)
-			if strings.HasPrefix(base, ".routing-") {
-				continue
-			}
-
 			path := event.Name
-			if err := waitForStable(path); err != nil {
-				w.logger.Warn("Skipping file. Reason: not stable after polling",
-					"path", path,
-					"error", err,
-				)
+
+			// Mail events: Create on .md files
+			if event.Has(fsnotify.Create) && strings.HasSuffix(base, ".md") {
+				// Skip temp files from our own atomic writes
+				if strings.HasPrefix(base, ".routing-") {
+					continue
+				}
+
+				if err := waitForStable(path); err != nil {
+					w.logger.Warn("Skipping file. Reason: not stable after polling",
+						"path", path,
+						"error", err,
+					)
+					continue
+				}
+
+				dir := w.resolveDir(path)
+				select {
+				case w.events <- WatcherEvent{Path: path, Dir: dir, Kind: EventKindMail}:
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
 
-			dir := w.resolveDir(path)
-			select {
-			case w.events <- WatcherEvent{Path: path, Dir: dir}:
-			case <-ctx.Done():
-				return
+			// Config events: Write on .toml files
+			if event.Has(fsnotify.Write) && strings.HasSuffix(base, ".toml") {
+				if err := waitForStable(path); err != nil {
+					w.logger.Warn("Skipping config file. Reason: not stable after polling",
+						"path", path,
+						"error", err,
+					)
+					continue
+				}
+
+				dir := w.resolveDir(path)
+				select {
+				case w.events <- WatcherEvent{Path: path, Dir: dir, Kind: EventKindConfig}:
+				case <-ctx.Done():
+					return
+				}
+				continue
 			}
 
 		case err, ok := <-w.fsw.Errors:

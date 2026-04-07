@@ -147,6 +147,11 @@ func (d *Daemon) Run(ctx context.Context) error {
 	}
 	defer watcher.Close()
 
+	// Watch pool dir itself for pool.toml changes (config hot-reload)
+	if err := watcher.Add(d.poolDir); err != nil {
+		return fmt.Errorf("watching pool dir: %w", err)
+	}
+
 	// Watch postoffice
 	postofficeDir := filepath.Join(d.poolDir, "postoffice")
 	if err := watcher.Add(postofficeDir); err != nil {
@@ -252,6 +257,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		case event, ok := <-watcher.Events():
 			if !ok {
 				return nil
+			}
+
+			// Config reload events
+			if event.Kind == EventKindConfig {
+				if filepath.Base(event.Path) == "pool.toml" {
+					d.reloadConfig(watcher)
+				}
+				continue
 			}
 
 			if event.Dir == postofficeDir {
@@ -1293,6 +1306,89 @@ func (d *Daemon) ensureDirs() error {
 	}
 
 	return nil
+}
+
+// reloadConfig re-reads pool.toml, validates, and swaps the config under lock.
+// On parse/validation failure, the old config is kept and a warning is logged.
+// Returns the new config if reload succeeded, nil otherwise. The watcher
+// parameter is used to add/remove inbox watches for changed experts.
+func (d *Daemon) reloadConfig(watcher *Watcher) {
+	newCfg, err := config.LoadPool(d.poolDir)
+	if err != nil {
+		d.logger.Warn("Config reload failed, keeping current config",
+			"error", err,
+		)
+		return
+	}
+
+	d.mu.Lock()
+	oldCfg := d.cfg
+	d.cfg = newCfg
+
+	// Rebuild shared expert lookup set
+	d.sharedSet = make(map[string]bool, len(newCfg.Shared.Include))
+	for _, name := range newCfg.Shared.Include {
+		d.sharedSet[name] = true
+	}
+	d.mu.Unlock()
+
+	// Diff experts: find added and removed
+	oldExperts := make(map[string]bool, len(oldCfg.Experts))
+	for name := range oldCfg.Experts {
+		oldExperts[name] = true
+	}
+	newExperts := make(map[string]bool, len(newCfg.Experts))
+	for name := range newCfg.Experts {
+		newExperts[name] = true
+	}
+
+	var added, removed []string
+	for name := range newExperts {
+		if !oldExperts[name] {
+			added = append(added, name)
+		}
+	}
+	for name := range oldExperts {
+		if !newExperts[name] {
+			removed = append(removed, name)
+		}
+	}
+
+	// Create dirs and watch new expert inboxes
+	if len(added) > 0 {
+		if err := d.ensureDirs(); err != nil {
+			d.logger.Error("Failed to create directories for new experts",
+				"error", err,
+			)
+		}
+		for _, name := range added {
+			inboxDir := mail.ResolveInbox(d.poolDir, name)
+			if err := watcher.Add(inboxDir); err != nil {
+				d.logger.Error("Failed to watch new expert inbox",
+					"expert", name,
+					"error", err,
+				)
+			}
+		}
+	}
+
+	// Log removed experts (don't delete dirs — data preservation)
+	for _, name := range removed {
+		d.logger.Info("Expert removed from config (inbox preserved)",
+			"expert", name,
+		)
+	}
+
+	d.logger.Info("Successfully reloaded config",
+		"experts_added", added,
+		"experts_removed", removed,
+	)
+
+	d.events.emit(Event{
+		Type:      EventConfigReloaded,
+		Timestamp: time.Now(),
+		Data:      ConfigReloadedData{ExpertsAdded: added, ExpertsRemoved: removed},
+	})
 }
 
 // sharedNamesMap returns the cached shared expert lookup set. May be nil.

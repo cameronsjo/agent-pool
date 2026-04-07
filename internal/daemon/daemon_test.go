@@ -37,6 +37,10 @@
 //   - ResearcherSpawn: message to researcher routes and spawns with configured model
 //   - ResearcherConfigResolution: researcher uses haiku, auth uses sonnet
 //   - ResearcherInboxDrainOnStart: pre-existing inbox message processed on startup
+//
+// Config hot-reload:
+//   - ConfigReloadAddsExpert: modify pool.toml to add expert, verify new inbox watchable
+//   - ConfigReloadInvalidKeepsOld: write invalid pool.toml, verify old config preserved
 package daemon_test
 
 import (
@@ -2486,4 +2490,123 @@ model = "haiku"
 
 	waitForTaskStatus(t, poolDir, "task-predrain-res", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
+}
+
+// --- Config hot-reload tests ---
+
+func TestDaemon_ConfigReloadAddsExpert(t *testing.T) {
+	poolDir := t.TempDir()
+
+	// Start with only "auth" expert
+	initialToml := `[pool]
+name = "reload-test"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	cfg := writePoolConfig(t, poolDir, initialToml)
+	spawner := &fakeSpawner{}
+	cancel, errCh := startTestDaemon(t, cfg, poolDir, spawner,
+		daemon.WithDrainTimeout(2*time.Second))
+
+	// Modify pool.toml to add a second expert
+	newToml := `[pool]
+name = "reload-test"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+
+[experts.payments]
+model = "haiku"
+`
+	if err := os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(newToml), 0o644); err != nil {
+		t.Fatalf("writing updated pool.toml: %v", err)
+	}
+
+	// Wait for the config reload to create the new expert inbox
+	paymentsInbox := filepath.Join(poolDir, "experts", "payments", "inbox")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(paymentsInbox); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(paymentsInbox); os.IsNotExist(err) {
+		t.Error("expected payments inbox to be created after config reload")
+	}
+
+	// Send a task to the new expert and verify it gets spawned
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-reload-001", "architect", "payments")
+	waitForTaskStatus(t, poolDir, "task-reload-001", taskboard.StatusCompleted)
+
+	spawner.mu.Lock()
+	found := false
+	for _, call := range spawner.calls {
+		if call.Name == "payments" {
+			found = true
+			break
+		}
+	}
+	spawner.mu.Unlock()
+
+	if !found {
+		t.Error("expected payments expert to be spawned after config reload")
+	}
+
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ConfigReloadInvalidKeepsOld(t *testing.T) {
+	poolDir := t.TempDir()
+
+	initialToml := `[pool]
+name = "reload-test"
+project_dir = "` + poolDir + `"
+
+[experts.auth]
+`
+	cfg := writePoolConfig(t, poolDir, initialToml)
+	spawner := &fakeSpawner{}
+
+	// Capture log output to verify warning
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger,
+		daemon.WithSpawner(spawner),
+		daemon.WithDrainTimeout(2*time.Second))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+	time.Sleep(500 * time.Millisecond)
+
+	// Write invalid TOML
+	if err := os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(`this is [[[not valid toml`), 0o644); err != nil {
+		t.Fatalf("writing invalid pool.toml: %v", err)
+	}
+
+	// Wait for the reload attempt
+	time.Sleep(1 * time.Second)
+
+	// Verify daemon is still running and the old config is preserved —
+	// send a task to auth (original expert) and verify it completes
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-still-works", "architect", "auth")
+	waitForTaskStatus(t, poolDir, "task-still-works", taskboard.StatusCompleted)
+
+	// Verify warning was logged
+	if !strings.Contains(logBuf.String(), "Config reload failed") {
+		t.Error("expected 'Config reload failed' warning in logs")
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("daemon returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("daemon did not shut down in time")
+	}
 }

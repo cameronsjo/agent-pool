@@ -16,6 +16,7 @@ const (
 	EventTaskCancelled      EventType = "task.cancelled"
 	EventTaskUnblocked      EventType = "task.unblocked"
 	EventCurationTriggered  EventType = "curation.triggered"
+	EventConfigReloaded     EventType = "config.reloaded"
 )
 
 // Event is a structured daemon event emitted at state transitions.
@@ -68,6 +69,10 @@ type CurationTriggeredData struct {
 	Reason string `json:"reason"`
 }
 
+type ConfigReloadedData struct {
+	ExpertsAdded   []string `json:"experts_added,omitempty"`
+	ExpertsRemoved []string `json:"experts_removed,omitempty"`
+}
 // EventBufSize is the subscriber channel buffer capacity. Subscribers that
 // can't keep up will miss events once the buffer fills (non-blocking emit).
 const EventBufSize = 64
