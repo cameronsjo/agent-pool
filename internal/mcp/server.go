@@ -59,7 +59,9 @@ func Run(ctx context.Context, cfg *ServerConfig) error {
 	if cfg.Role == "concierge" {
 		RegisterConciergeTools(srv, cfg)
 	}
-	// TODO(v0.6): RegisterResearcherTools when researcher role is implemented
+	if cfg.Role == "researcher" {
+		RegisterResearcherTools(srv, cfg)
+	}
 
 	cfg.Logger.Info("Preparing to serve MCP tools",
 		"pool_dir", cfg.PoolDir,
