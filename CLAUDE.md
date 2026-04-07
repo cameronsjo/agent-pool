@@ -80,7 +80,7 @@ make check            # vet + lint + test
 
 ## Implementation Status
 
-**v0.8 complete** — through Researcher + Curation. v0.9 (formulas + polish) in progress. See `docs/plans/architecture.md` § Implementation Phasing for full roadmap.
+**v0.9 complete** — through Formulas + Polish. See `docs/plans/architecture.md` § Implementation Phasing for full roadmap.
 
 | Version | Milestone | Key Additions |
 |---------|-----------|---------------|
@@ -91,8 +91,7 @@ make check            # vet + lint + test
 | v0.6 | Daemon Lifecycle | Unix socket, stop/status/watch, graceful drain |
 | v0.7 | Shared Experts | Cross-project knowledge, multi-pool, project overlays |
 | v0.8 | Researcher | Curation, pattern promotion, cold-start seeding |
-
-Next: **v0.9** — Formulas + Polish
+| v0.9 | Formulas | Workflow templates, config hot-reload, hardening |
 
 ## Code Conventions
 

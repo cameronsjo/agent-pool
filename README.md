@@ -133,7 +133,7 @@ make check            # vet + lint + test
 | **v0.6** | Complete | Daemon lifecycle — unix socket, stop/status/watch, graceful drain |
 | **v0.7** | Complete | Shared experts — cross-project knowledge, multi-pool |
 | **v0.8** | Complete | Researcher — curation, cold-start seeding, pattern promotion |
-| v0.9 | In progress | Formulas — workflow templates, config hot-reload |
+| **v0.9** | Complete | Formulas — workflow templates, config hot-reload |
 
 ## License
 

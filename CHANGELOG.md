@@ -2,7 +2,11 @@
 
 All notable changes to Agent Pool are documented here.
 
-## [Unreleased] — v0.9
+## [Unreleased]
+
+## [0.9.0] — 2026-04-07
+
+Formulas and operational hardening.
 
 - Formula parsing (`internal/formula/`) with TOML templates, DAG validation
 - `instantiate_formula` architect MCP tool for bulk task creation
