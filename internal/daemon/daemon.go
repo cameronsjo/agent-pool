@@ -57,6 +57,7 @@ type Daemon struct {
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 	events       *eventBus
 	sharedSet    map[string]bool // cached shared.include lookup set, built once in New
+	curation     *curationScheduler
 }
 
 // Option configures a Daemon.
@@ -112,6 +113,7 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 		spawner:      defaultSpawner{},
 		drainTimeout: 30 * time.Second,
 		events:       newEventBus(),
+		curation:     newCurationScheduler(&cfg.Curation, poolDir, logger),
 	}
 
 	// Build cached shared expert lookup set
@@ -206,6 +208,27 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Drain pre-existing messages from before the daemon started
 	d.drainPostoffice(childCtx)
 	d.drainAllInboxes(childCtx)
+
+	// Start time-based curation ticker
+	if d.curation.intervalHours > 0 {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			ticker := time.NewTicker(time.Duration(d.curation.intervalHours) * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-childCtx.Done():
+					return
+				case <-ticker.C:
+					if d.curation.ShouldTriggerByTime() {
+						d.curation.Reset()
+						d.triggerCuration("time_interval")
+					}
+				}
+			}
+		}()
+	}
 
 	// Main event loop
 	for {
@@ -847,6 +870,13 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 	for _, expert := range expertsToWake {
 		d.wg.Add(1)
 		go func(e string) { defer d.wg.Done(); d.handleInbox(ctx, e, "") }(expert)
+	}
+
+	// Check curation threshold after task completion
+	if d.curation.RecordTaskCompletion() {
+		d.curation.Reset()
+		d.wg.Add(1)
+		go func() { defer d.wg.Done(); d.triggerCuration("task_threshold") }()
 	}
 }
 

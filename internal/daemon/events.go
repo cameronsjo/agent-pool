@@ -13,8 +13,9 @@ const (
 	EventExpertSpawning  EventType = "expert.spawning"
 	EventExpertCompleted EventType = "expert.completed"
 	EventExpertFailed    EventType = "expert.failed"
-	EventTaskCancelled   EventType = "task.cancelled"
-	EventTaskUnblocked   EventType = "task.unblocked"
+	EventTaskCancelled      EventType = "task.cancelled"
+	EventTaskUnblocked      EventType = "task.unblocked"
+	EventCurationTriggered  EventType = "curation.triggered"
 )
 
 // Event is a structured daemon event emitted at state transitions.
@@ -61,6 +62,10 @@ type TaskCancelledData struct {
 type TaskUnblockedData struct {
 	TaskID string `json:"task_id"`
 	Expert string `json:"expert"`
+}
+
+type CurationTriggeredData struct {
+	Reason string `json:"reason"`
 }
 
 // EventBufSize is the subscriber channel buffer capacity. Subscribers that
