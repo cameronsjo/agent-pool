@@ -71,12 +71,9 @@ func RotateLogs(expertDir string, retention int) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("creating archive: %w", err)
 	}
-	defer f.Close()
 
 	gw := gzip.NewWriter(f)
-	defer gw.Close()
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
 
 	var archived int
 	var toDelete []string
@@ -100,14 +97,21 @@ func RotateLogs(expertDir string, retention int) (int, error) {
 		}
 	}
 
-	// Close writers before deleting source files
-	tw.Close()
-	gw.Close()
-	f.Close()
+	// Close writers before deleting source files. Check errors — if
+	// finalization fails the archive is incomplete and sources must be kept.
+	if err := tw.Close(); err != nil {
+		return 0, fmt.Errorf("finalizing tar: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return 0, fmt.Errorf("finalizing gzip: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return 0, fmt.Errorf("closing archive file: %w", err)
+	}
 
-	// Delete archived files
+	// Delete archived files (best-effort — sources are safely in the archive)
 	for _, path := range toDelete {
-		os.Remove(path) // best-effort; files are safely in the archive
+		os.Remove(path)
 	}
 
 	return archived, nil

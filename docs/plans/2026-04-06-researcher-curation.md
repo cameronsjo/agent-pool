@@ -2,7 +2,7 @@
 
 ## Context
 
-v0.7 (shared experts + multi-pool) is complete on `feat/v0.7-shared-experts`. The researcher role has been scaffolded across prior versions — config parsing, mail routing, directory creation, builtin role registration — but nothing actually watches its inbox, spawns sessions, or provides tools. v0.8 brings the researcher to life as the pool's knowledge curator: it reads expert state/logs, distills knowledge, promotes patterns to identity, and keeps state.md lean over time.
+v0.7 (shared experts + multi-pool) is complete on `feat/v0.7-shared-experts`. The researcher role has been scaffolded across prior versions — config parsing, mail routing, directory creation, built-in role registration — but nothing actually watches its inbox, spawns sessions, or provides tools. v0.8 brings the researcher to life as the pool's knowledge curator: it reads expert state/logs, distills knowledge, promotes patterns to identity, and keeps state.md lean over time.
 
 The architecture doc validates: "Does curation keep state.md lean over time? Does cold-start seeding produce useful initial state?"
 

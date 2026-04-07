@@ -216,7 +216,7 @@ func LoadPool(poolDir string) (*PoolConfig, error) {
 	if cfg.Architect.HumanInbox == "" {
 		cfg.Architect.HumanInbox = "stdout"
 	}
-	if cfg.Defaults.LogRetention == 0 {
+	if cfg.Defaults.LogRetention <= 0 {
 		cfg.Defaults.LogRetention = 50
 	}
 	if cfg.Curation.IntervalTasks == 0 {

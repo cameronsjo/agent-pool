@@ -17,6 +17,7 @@ import (
 
 	"github.com/cameronsjo/agent-pool/internal/config"
 	"github.com/cameronsjo/agent-pool/internal/daemon"
+	"github.com/cameronsjo/agent-pool/internal/taskboard"
 )
 
 func TestCurationScheduler_TaskThreshold(t *testing.T) {
@@ -83,8 +84,10 @@ interval_hours = 168
 	}
 
 	// Verify the curation task body contains expert metadata
+	var curationTaskID string
 	for _, c := range fake.getCalls() {
 		if c.Name == "researcher" && strings.HasPrefix(c.TaskMessage.ID, "curation-") {
+			curationTaskID = c.TaskMessage.ID
 			body := c.TaskMessage.Body
 			if !strings.Contains(body, "auth") {
 				t.Error("curation task body should mention auth expert")
@@ -99,5 +102,9 @@ interval_hours = 168
 		}
 	}
 
+	// Wait for curation task to complete before shutdown
+	if curationTaskID != "" {
+		waitForTaskStatus(t, poolDir, curationTaskID, taskboard.StatusCompleted)
+	}
 	shutdownDaemon(t, cancel, errCh)
 }

@@ -222,7 +222,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 					return
 				case <-ticker.C:
 					if d.curation.ShouldTriggerByTime() {
-						d.curation.Reset()
 						d.triggerCuration("time_interval")
 					}
 				}
@@ -874,7 +873,6 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 
 	// Check curation threshold after task completion
 	if d.curation.RecordTaskCompletion() {
-		d.curation.Reset()
 		d.wg.Add(1)
 		go func() { defer d.wg.Done(); d.triggerCuration("task_threshold") }()
 	}

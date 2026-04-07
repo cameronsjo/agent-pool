@@ -114,16 +114,17 @@ func handleResearcherListExperts(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		for _, name := range names {
 			dir := mail.ResolveExpertDir(cfg.PoolDir, name)
-			experts = append(experts, gatherExpertInfo(name, "pool", dir))
+			experts = append(experts, gatherExpertInfo(name, "pool", dir, dir))
 		}
 
-		// Shared experts
+		// Shared experts — state in user dir, logs in pool overlay
 		for _, name := range poolCfg.Shared.Include {
 			dir, err := config.SharedExpertDir(name)
 			if err != nil {
 				continue
 			}
-			experts = append(experts, gatherExpertInfo(name, "shared", dir))
+			overlayDir := filepath.Join(cfg.PoolDir, "shared-state", name)
+			experts = append(experts, gatherExpertInfo(name, "shared", dir, overlayDir))
 		}
 
 		data, err := json.MarshalIndent(experts, "", "  ")
@@ -135,15 +136,17 @@ func handleResearcherListExperts(cfg *ServerConfig) server.ToolHandlerFunc {
 	}
 }
 
-// gatherExpertInfo stats an expert directory for metadata.
-func gatherExpertInfo(name, expertType, dir string) expertInfo {
+// gatherExpertInfo stats an expert directory for metadata. The logBaseDir
+// parameter specifies where logs live (same as dir for pool-scoped experts,
+// but the pool overlay for shared experts).
+func gatherExpertInfo(name, expertType, dir, logBaseDir string) expertInfo {
 	info := expertInfo{Name: name, Type: expertType}
 
 	if fi, err := os.Stat(filepath.Join(dir, "state.md")); err == nil {
 		info.StateBytes = fi.Size()
 	}
 
-	logsDir := filepath.Join(dir, "logs")
+	logsDir := filepath.Join(logBaseDir, "logs")
 	if entries, err := os.ReadDir(logsDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
@@ -240,7 +243,8 @@ func handleReadExpertLogs(cfg *ServerConfig) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("expert parameter is required"), nil
 		}
 
-		dir := resolveTargetExpertDir(cfg.PoolDir, expertName)
+		// Logs dir may differ from state dir for shared experts
+		dir := resolveLogsDir(cfg.PoolDir, expertName)
 		query := request.GetString("query", "")
 
 		countStr := request.GetString("count", "10")
@@ -303,16 +307,17 @@ func handleEnrichState(cfg *ServerConfig) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("expert parameter is required"), nil
 		}
 
-		dir := resolveTargetExpertDir(cfg.PoolDir, expertName)
+		stateDir := resolveTargetExpertDir(cfg.PoolDir, expertName)
+		logDir := resolveLogsDir(cfg.PoolDir, expertName)
 
-		identity, state, errors, err := expert.ReadState(dir)
+		identity, state, errors, err := expert.ReadState(stateDir)
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("reading state: %v", err)), nil
 		}
 
 		// Read last 10 index entries
 		var recentIndex []string
-		indexPath := filepath.Join(dir, "logs", "index.md")
+		indexPath := filepath.Join(logDir, "logs", "index.md")
 		if data, err := os.ReadFile(indexPath); err == nil {
 			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 			for i := 2; i < len(lines); i++ {
@@ -328,7 +333,7 @@ func handleEnrichState(cfg *ServerConfig) server.ToolHandlerFunc {
 
 		// Read last 3 full log files (newest first by filename sort)
 		var recentLogs []map[string]string
-		logsDir := filepath.Join(dir, "logs")
+		logsDir := filepath.Join(logDir, "logs")
 		if entries, err := os.ReadDir(logsDir); err == nil {
 			var jsonFiles []string
 			for _, e := range entries {
@@ -486,13 +491,23 @@ func handlePromotePattern(cfg *ServerConfig) server.ToolHandlerFunc {
 
 // resolveTargetExpertDir returns the state directory for a target expert.
 // Built-in roles use {poolDir}/{role}/, pool-scoped use {poolDir}/experts/{name}/.
-// For shared experts, returns the user-level directory.
+// For shared experts, returns the user-level directory (identity + state).
 func resolveTargetExpertDir(poolDir, name string) string {
 	if isSharedExpert(poolDir, name) {
 		dir, err := config.SharedExpertDir(name)
 		if err == nil {
 			return dir
 		}
+	}
+	return mail.ResolveExpertDir(poolDir, name)
+}
+
+// resolveLogsDir returns the directory containing logs for an expert.
+// For shared experts, logs live in the pool overlay (shared-state/<name>/).
+// For pool-scoped experts, logs are in the expert dir itself.
+func resolveLogsDir(poolDir, name string) string {
+	if isSharedExpert(poolDir, name) {
+		return filepath.Join(poolDir, "shared-state", name)
 	}
 	return mail.ResolveExpertDir(poolDir, name)
 }

@@ -627,3 +627,55 @@ func TestResearcherListExperts_IncludesShared(t *testing.T) {
 		t.Errorf("expected security-standards/shared, got %s/%s", experts[1].Name, experts[1].Type)
 	}
 }
+
+func TestResearcherReadExpertLogs_SharedOverlay(t *testing.T) {
+	poolDir, _ := setupSharedResearcherPool(t)
+
+	// Seed logs in the pool overlay (where the daemon writes them)
+	overlayDir := filepath.Join(poolDir, "shared-state", "security-standards")
+	expert.WriteLog(overlayDir, "task-sec-001", []byte(`{"type":"result","result":"Audited CORS policy"}`))
+	expert.AppendIndex(overlayDir, &expert.LogEntry{TaskID: "task-sec-001", From: "architect", ExitCode: 0, Summary: "Audited CORS policy"})
+
+	srv := buildMCPTestServer(t, poolDir, "researcher", "researcher")
+
+	// read_expert_logs should find logs from the overlay
+	result := callTool(t, srv, "read_expert_logs", map[string]any{
+		"expert": "security-standards",
+	})
+	text := resultText(t, result)
+
+	if !strings.Contains(text, "task-sec-001") {
+		t.Errorf("expected shared overlay log entry, got: %s", text)
+	}
+
+	// enrich_state should include overlay logs
+	result = callTool(t, srv, "enrich_state", map[string]any{
+		"expert": "security-standards",
+	})
+	text = resultText(t, result)
+
+	var enriched map[string]any
+	if err := json.Unmarshal([]byte(text), &enriched); err != nil {
+		t.Fatalf("unmarshaling: %v", err)
+	}
+
+	recentIndex, ok := enriched["recent_index"].([]any)
+	if !ok || len(recentIndex) == 0 {
+		t.Error("enrich_state should include overlay log index entries")
+	}
+
+	// list_experts should show log count from overlay
+	result = callTool(t, srv, "list_experts", nil)
+	text = resultText(t, result)
+
+	var allExperts []struct {
+		Name     string `json:"name"`
+		LogCount int    `json:"log_count"`
+	}
+	json.Unmarshal([]byte(text), &allExperts)
+	for _, e := range allExperts {
+		if e.Name == "security-standards" && e.LogCount != 1 {
+			t.Errorf("shared expert log_count = %d, want 1", e.LogCount)
+		}
+	}
+}

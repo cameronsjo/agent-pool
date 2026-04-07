@@ -32,8 +32,8 @@ func TestPost_WritesMessage(t *testing.T) {
 	}
 
 	path := filepath.Join(poolDir, "postoffice", "task-post-001.md")
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Fatal("message file not created")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("message file not created: %v", err)
 	}
 
 	// Verify it's parseable

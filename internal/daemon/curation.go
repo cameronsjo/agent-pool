@@ -40,30 +40,41 @@ func newCurationScheduler(cfg *config.CurationSection, poolDir string, logger *s
 
 // RecordTaskCompletion increments the completed task counter. Returns true
 // when the threshold is reached, signaling that curation should be triggered.
+// Atomically resets the counter when the threshold fires, preventing double-fire.
+// Returns false if intervalTasks <= 0 (disabled).
 func (cs *curationScheduler) RecordTaskCompletion() bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
+	if cs.intervalTasks <= 0 {
+		return false
+	}
+
 	cs.taskCount++
-	return cs.taskCount >= cs.intervalTasks
+	if cs.taskCount >= cs.intervalTasks {
+		cs.taskCount = 0
+		cs.lastCuration = time.Now()
+		return true
+	}
+	return false
 }
 
 // ShouldTriggerByTime returns true if enough time has elapsed since the last
-// curation trigger.
+// curation trigger. Atomically resets the timer when triggered.
+// Returns false if intervalHours <= 0 (disabled).
 func (cs *curationScheduler) ShouldTriggerByTime() bool {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	return time.Since(cs.lastCuration) >= time.Duration(cs.intervalHours)*time.Hour
-}
+	if cs.intervalHours <= 0 {
+		return false
+	}
 
-// Reset zeroes the task counter and updates the last curation timestamp.
-func (cs *curationScheduler) Reset() {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-
-	cs.taskCount = 0
-	cs.lastCuration = time.Now()
+	if time.Since(cs.lastCuration) >= time.Duration(cs.intervalHours)*time.Hour {
+		cs.lastCuration = time.Now()
+		return true
+	}
+	return false
 }
 
 // triggerCuration composes a curation task and posts it to the researcher's
@@ -130,14 +141,15 @@ func buildCurationTaskBody(cfg *config.PoolConfig, poolDir, reason string) strin
 		b.WriteString(fmt.Sprintf("| %s | pool | %d bytes | %d |\n", name, stateSize, logCount))
 	}
 
-	// Shared experts
+	// Shared experts — logs live in pool overlay, state in user dir
 	for _, name := range cfg.Shared.Include {
-		dir, err := config.SharedExpertDir(name)
+		overlayDir := filepath.Join(poolDir, "shared-state", name)
+		userDir, err := config.SharedExpertDir(name)
 		if err != nil {
 			continue
 		}
-		stateSize := fileSize(filepath.Join(dir, "state.md"))
-		logCount := countLogFiles(filepath.Join(dir, "logs"))
+		stateSize := fileSize(filepath.Join(userDir, "state.md"))
+		logCount := countLogFiles(filepath.Join(overlayDir, "logs"))
 		b.WriteString(fmt.Sprintf("| %s | shared | %d bytes | %d |\n", name, stateSize, logCount))
 	}
 
@@ -168,11 +180,9 @@ func (d *Daemon) rotateAllLogs() {
 	}
 
 	for _, name := range d.cfg.Shared.Include {
-		dir, err := config.SharedExpertDir(name)
-		if err != nil {
-			continue
-		}
-		if archived, rotErr := expert.RotateLogs(dir, retention); rotErr != nil {
+		// Shared expert logs live in pool overlay, not user-level dir
+		overlayDir := filepath.Join(d.poolDir, "shared-state", name)
+		if archived, rotErr := expert.RotateLogs(overlayDir, retention); rotErr != nil {
 			d.logger.Warn("Failed to rotate shared expert logs",
 				"expert", name,
 				"error", rotErr,

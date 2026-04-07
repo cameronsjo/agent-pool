@@ -2345,6 +2345,7 @@ model = "haiku"
 		t.Error("log should be written to researcher/logs/, not experts/researcher/logs/")
 	}
 
+	waitForTaskStatus(t, poolDir, "task-res-001", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }
 
@@ -2419,6 +2420,8 @@ model = "sonnet"
 		}
 	}
 
+	waitForTaskStatus(t, poolDir, "task-cfg-res", taskboard.StatusCompleted)
+	waitForTaskStatus(t, poolDir, "task-cfg-auth2", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }
 
@@ -2481,5 +2484,6 @@ model = "haiku"
 		t.Errorf("spawn name = %q, want researcher", calls[0].Name)
 	}
 
+	waitForTaskStatus(t, poolDir, "task-predrain-res", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }

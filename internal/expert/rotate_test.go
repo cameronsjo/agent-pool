@@ -186,7 +186,9 @@ func TestRotateLogs_IndexUntouched(t *testing.T) {
 		os.WriteFile(filepath.Join(logsDir, fmt.Sprintf("task-%03d.json", i)), []byte("{}"), 0o644)
 	}
 
-	RotateLogs(dir, 3)
+	if _, err := RotateLogs(dir, 3); err != nil {
+		t.Fatalf("RotateLogs: %v", err)
+	}
 
 	// Verify index.md is unchanged
 	data, err := os.ReadFile(filepath.Join(logsDir, "index.md"))

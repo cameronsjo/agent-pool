@@ -95,7 +95,7 @@ Formulas just bulk-register tasks with pre-defined dependency graphs.
 
 ### Formula Structure
 
-```
+```text
 {poolDir}/formulas/
 ├── feature-impl.toml        # Standard feature flow
 ├── bug-triage.toml           # Bug investigation + fix

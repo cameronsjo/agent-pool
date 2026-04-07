@@ -12,6 +12,10 @@ import (
 // Creates the postoffice directory if it doesn't exist. Uses atomic writes
 // to prevent partial files from being picked up by the daemon's watcher.
 func Post(poolDir string, msg *Message) error {
+	if poolDir == "" {
+		return fmt.Errorf("pool directory is empty")
+	}
+
 	composed, err := Compose(msg)
 	if err != nil {
 		return fmt.Errorf("composing message: %w", err)
