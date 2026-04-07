@@ -35,12 +35,9 @@ ln -sf $(pwd)/bin/agent-pool ~/bin/agent-pool
 cd ~/Projects/my-project
 agent-pool init
 
-# Add experts to .agent-pool/pool.toml
-cat >> .agent-pool/pool.toml << 'EOF'
-
-[experts.backend]
-model = "sonnet"
-EOF
+# Add experts
+agent-pool add backend
+agent-pool add frontend --model opus
 
 # Start the daemon
 agent-pool start

@@ -13,6 +13,13 @@
 //   - Fresh directory → creates dirs + pool.toml with correct content
 //   - Already exists → returns error
 //   - Generated TOML is parseable by config.LoadPool
+//
+// addExpert:
+//   - Adds expert to pool.toml + creates dirs
+//   - Duplicate name → error
+//   - Builtin role name → error
+//   - Custom model → written to TOML
+//   - No model → section without model line (uses defaults)
 
 package main
 
@@ -185,5 +192,79 @@ func TestInitPool_GeneratesValidConfig(t *testing.T) {
 	}
 	if cfg.Defaults.Model != "sonnet" {
 		t.Errorf("defaults model = %q, want %q", cfg.Defaults.Model, "sonnet")
+	}
+}
+
+func TestAddExpert_CreatesExpert(t *testing.T) {
+	tmp := t.TempDir()
+	poolDir := filepath.Join(tmp, ".agent-pool")
+	initPool(poolDir, "test", tmp)
+
+	if err := addExpert(poolDir, "backend", ""); err != nil {
+		t.Fatalf("addExpert: %v", err)
+	}
+
+	// Verify directories created
+	for _, sub := range []string{"inbox", "logs"} {
+		dir := filepath.Join(poolDir, "experts", "backend", sub)
+		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+			t.Errorf("expected directory experts/backend/%s", sub)
+		}
+	}
+
+	// Verify config is valid and includes the expert
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool after add: %v", err)
+	}
+	if _, ok := cfg.Experts["backend"]; !ok {
+		t.Error("expert 'backend' not found in loaded config")
+	}
+}
+
+func TestAddExpert_WithModel(t *testing.T) {
+	tmp := t.TempDir()
+	poolDir := filepath.Join(tmp, ".agent-pool")
+	initPool(poolDir, "test", tmp)
+
+	if err := addExpert(poolDir, "frontend", "opus"); err != nil {
+		t.Fatalf("addExpert: %v", err)
+	}
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+	if cfg.Experts["frontend"].Model != "opus" {
+		t.Errorf("model = %q, want %q", cfg.Experts["frontend"].Model, "opus")
+	}
+}
+
+func TestAddExpert_Duplicate(t *testing.T) {
+	tmp := t.TempDir()
+	poolDir := filepath.Join(tmp, ".agent-pool")
+	initPool(poolDir, "test", tmp)
+
+	addExpert(poolDir, "backend", "")
+	err := addExpert(poolDir, "backend", "")
+	if err == nil {
+		t.Fatal("expected error for duplicate expert")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %q, want 'already exists'", err.Error())
+	}
+}
+
+func TestAddExpert_BuiltinRole(t *testing.T) {
+	tmp := t.TempDir()
+	poolDir := filepath.Join(tmp, ".agent-pool")
+	initPool(poolDir, "test", tmp)
+
+	err := addExpert(poolDir, "architect", "")
+	if err == nil {
+		t.Fatal("expected error for builtin role name")
+	}
+	if !strings.Contains(err.Error(), "built-in role") {
+		t.Errorf("error = %q, want 'built-in role'", err.Error())
 	}
 }
