@@ -1,26 +1,33 @@
 // Architect tools coverage matrix:
 //
 // RegisterArchitectTools (Classification: INTEGRATION)
-//   [x] Happy: all 4 architect tools + 6 expert tools registered (TestArchitectTools_Registration)
+//   [x] Happy: all 5 architect tools + 6 expert tools registered (TestArchitectTools_Registration)
 //
-//define_contract (Classification: FILESYSTEM I/O)
+// define_contract (Classification: FILESYSTEM I/O)
 //   [x] Happy: creates contract file and index (TestDefineContract_Happy)
 //   [x] Error: missing params (TestDefineContract_MissingParams)
 //   [x] Error: fewer than 2 between parties (TestDefineContract_TooFewBetween)
 //
-//send_task (Classification: FILESYSTEM I/O)
+// send_task (Classification: FILESYSTEM I/O)
 //   [x] Happy: message appears in postoffice (TestSendTask_Happy)
 //   [x] Error: missing params (TestSendTask_MissingParams)
 //   [x] Error: path traversal ID (TestSendTask_PathTraversal)
 //
-//verify_result (Classification: FILESYSTEM I/O)
+// verify_result (Classification: FILESYSTEM I/O)
 //   [x] Happy: verification log created (TestVerifyResult_Happy)
 //   [x] Error: invalid status (TestVerifyResult_InvalidStatus)
 //   [x] Error: contract not found (TestVerifyResult_ContractNotFound)
 //
-//amend_contract (Classification: FILESYSTEM I/O)
+// amend_contract (Classification: FILESYSTEM I/O)
 //   [x] Happy: version incremented + notify messages (TestAmendContract_Happy)
 //   [x] Error: contract not found (TestAmendContract_NotFound)
+//
+// instantiate_formula (Classification: FILESYSTEM I/O)
+//   [x] Happy: all tasks created with correct deps (TestInstantiateFormula_Happy)
+//   [x] Happy: overrides and expert assignments applied (TestInstantiateFormula_Overrides)
+//   [x] Error: formula not found (TestInstantiateFormula_NotFound)
+//   [x] Error: missing expert for role=experts step (TestInstantiateFormula_MissingExpert)
+//   [x] Error: invalid prefix (TestInstantiateFormula_InvalidPrefix)
 //
 // Approval gate integration (Classification: FILESYSTEM I/O + CONCURRENCY)
 //   [x] Happy: none mode bypasses approval (TestSendTask_ApprovalNoneMode)
@@ -72,6 +79,7 @@ func TestArchitectTools_Registration(t *testing.T) {
 		// Architect tools
 		"define_contract", "send_task",
 		"verify_result", "amend_contract",
+		"instantiate_formula",
 		// Expert tools (inherited)
 		"read_state", "update_state",
 		"append_error", "send_response",
@@ -338,6 +346,209 @@ func TestAmendContract_NotFound(t *testing.T) {
 	})
 	if !result.IsError {
 		t.Error("expected error for nonexistent contract")
+	}
+}
+
+// --- instantiate_formula tests ---
+
+// writeFormula writes a TOML formula file into the pool's formulas/ directory.
+func writeFormula(t *testing.T, poolDir, name, content string) {
+	t.Helper()
+	dir := filepath.Join(poolDir, "formulas")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating formulas dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing formula: %v", err)
+	}
+}
+
+func TestInstantiateFormula_Happy(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	writeFormula(t, poolDir, "feature-impl", `
+description = "Standard feature flow"
+
+[[steps]]
+id = "gather"
+role = "concierge"
+title = "Gather input"
+description = "Ask experts for input"
+
+[[steps]]
+id = "plan"
+role = "concierge"
+title = "Build plan"
+description = "Synthesize input"
+depends_on = ["gather"]
+
+[[steps]]
+id = "implement"
+role = "experts"
+title = "Implement"
+description = "Build the feature"
+depends_on = ["plan"]
+
+[[steps]]
+id = "verify"
+role = "architect"
+title = "Verify"
+description = "Check contracts"
+depends_on = ["implement"]
+`)
+
+	result := callTool(t, srv, "instantiate_formula", map[string]any{
+		"formula": "feature-impl",
+		"prefix":  "feat-auth",
+		"experts": `{"implement": "auth-expert"}`,
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "4 tasks created") {
+		t.Errorf("expected '4 tasks created', got %q", text)
+	}
+
+	// Verify all 4 messages in postoffice
+	expectedTasks := []struct {
+		id   string
+		to   string
+		deps []string
+	}{
+		{"feat-auth-gather", "concierge", nil},
+		{"feat-auth-plan", "concierge", []string{"feat-auth-gather"}},
+		{"feat-auth-implement", "auth-expert", []string{"feat-auth-plan"}},
+		{"feat-auth-verify", "architect", []string{"feat-auth-implement"}},
+	}
+
+	for _, exp := range expectedTasks {
+		path := filepath.Join(poolDir, "postoffice", exp.id+".md")
+		msg, err := mail.ParseFile(path)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", exp.id, err)
+		}
+		if msg.To != exp.to {
+			t.Errorf("task %s: to = %q, want %q", exp.id, msg.To, exp.to)
+		}
+		if msg.From != "architect" {
+			t.Errorf("task %s: from = %q, want architect", exp.id, msg.From)
+		}
+		if msg.Type != mail.TypeTask {
+			t.Errorf("task %s: type = %q, want task", exp.id, msg.Type)
+		}
+		if len(msg.DependsOn) != len(exp.deps) {
+			t.Errorf("task %s: deps = %v, want %v", exp.id, msg.DependsOn, exp.deps)
+		} else {
+			for i, dep := range exp.deps {
+				if msg.DependsOn[i] != dep {
+					t.Errorf("task %s: dep[%d] = %q, want %q", exp.id, i, msg.DependsOn[i], dep)
+				}
+			}
+		}
+	}
+}
+
+func TestInstantiateFormula_Overrides(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	writeFormula(t, poolDir, "simple", `
+description = "Simple two-step"
+
+[[steps]]
+id = "do"
+role = "concierge"
+title = "Do the thing"
+description = "Default body"
+
+[[steps]]
+id = "check"
+role = "architect"
+title = "Check result"
+description = "Default check"
+depends_on = ["do"]
+`)
+
+	result := callTool(t, srv, "instantiate_formula", map[string]any{
+		"formula":   "simple",
+		"prefix":    "test-run",
+		"overrides": `{"do": "Custom body for this specific task"}`,
+	})
+
+	text := resultText(t, result)
+	if !strings.Contains(text, "2 tasks created") {
+		t.Errorf("expected '2 tasks created', got %q", text)
+	}
+
+	// Verify override was applied
+	msg, err := mail.ParseFile(filepath.Join(poolDir, "postoffice", "test-run-do.md"))
+	if err != nil {
+		t.Fatalf("parsing test-run-do: %v", err)
+	}
+	if !strings.Contains(msg.Body, "Custom body") {
+		t.Errorf("expected custom body, got %q", msg.Body)
+	}
+
+	// Verify non-overridden step has default body
+	msg2, err := mail.ParseFile(filepath.Join(poolDir, "postoffice", "test-run-check.md"))
+	if err != nil {
+		t.Fatalf("parsing test-run-check: %v", err)
+	}
+	if !strings.Contains(msg2.Body, "Default check") {
+		t.Errorf("expected default body, got %q", msg2.Body)
+	}
+}
+
+func TestInstantiateFormula_NotFound(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "instantiate_formula", map[string]any{
+		"formula": "nonexistent",
+		"prefix":  "test",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "loading formula") {
+		t.Errorf("expected loading error, got %q", text)
+	}
+}
+
+func TestInstantiateFormula_MissingExpert(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	writeFormula(t, poolDir, "needs-expert", `
+description = "Needs expert assignment"
+
+[[steps]]
+id = "work"
+role = "experts"
+title = "Do work"
+description = "Needs an expert"
+`)
+
+	result := callTool(t, srv, "instantiate_formula", map[string]any{
+		"formula": "needs-expert",
+		"prefix":  "test",
+		// No experts map provided
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "no expert assigned") {
+		t.Errorf("expected 'no expert assigned' error, got %q", text)
+	}
+}
+
+func TestInstantiateFormula_InvalidPrefix(t *testing.T) {
+	poolDir := setupArchitectPool(t)
+	srv := buildArchitectTestServer(t, poolDir)
+
+	result := callTool(t, srv, "instantiate_formula", map[string]any{
+		"formula": "test",
+		"prefix":  "../escape",
+	})
+	text := resultText(t, result)
+	if !strings.Contains(text, "invalid prefix") {
+		t.Errorf("expected 'invalid prefix' error, got %q", text)
 	}
 }
 
