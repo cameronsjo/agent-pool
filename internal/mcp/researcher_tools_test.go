@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -459,5 +460,170 @@ func TestResearcherPromotePattern_EmptyIdentity(t *testing.T) {
 	}
 	if !strings.Contains(content, "First promoted pattern") {
 		t.Error("pattern should be present")
+	}
+}
+
+// --- Shared expert tests ---
+//
+// Shared Expert Enrichment:
+//   [x] ReadExpertState_SharedExpert: returns both user and project state
+//   [x] WriteExpertState_SharedExpert_ProjectLayer: writes to pool overlay
+//   [x] PromotePattern_SharedExpert: writes to user-level identity.md
+//   [x] ListExperts_IncludesShared: shared experts in list with correct type
+
+func setupSharedResearcherPool(t *testing.T) (poolDir string, fakeHome string) {
+	t.Helper()
+
+	// Fake HOME so config.SharedExpertDir resolves to a temp dir
+	fakeHome = t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", fakeHome)
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+
+	// Create user-level shared expert directory
+	sharedDir := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards")
+	os.MkdirAll(filepath.Join(sharedDir, "logs"), 0o755)
+	os.WriteFile(filepath.Join(sharedDir, "identity.md"), []byte("# Security Standards\n\nCross-project security expert.\n"), 0o644)
+	os.WriteFile(filepath.Join(sharedDir, "state.md"), []byte("User-level security knowledge.\n"), 0o644)
+
+	// Create pool with shared include
+	poolDir = makePoolDirs(t,
+		"researcher/inbox",
+		"researcher/logs",
+		"postoffice",
+		"shared-state/security-standards",
+		"experts/auth/inbox",
+		"experts/auth/logs",
+	)
+
+	// Write project overlay state
+	overlayDir := filepath.Join(poolDir, "shared-state", "security-standards")
+	os.WriteFile(filepath.Join(overlayDir, "state.md"), []byte("Project-specific security rules.\n"), 0o644)
+
+	poolToml := `[pool]
+name = "test-shared-pool"
+project_dir = "` + poolDir + `"
+
+[shared]
+include = ["security-standards"]
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	return poolDir, fakeHome
+}
+
+func TestResearcherReadExpertState_SharedExpert(t *testing.T) {
+	poolDir, _ := setupSharedResearcherPool(t)
+	srv := buildMCPTestServer(t, poolDir, "researcher", "researcher")
+
+	result := callTool(t, srv, "read_expert_state", map[string]any{
+		"expert": "security-standards",
+	})
+	text := resultText(t, result)
+
+	var state map[string]string
+	if err := json.Unmarshal([]byte(text), &state); err != nil {
+		t.Fatalf("unmarshaling: %v\nraw: %s", err, text)
+	}
+
+	if !strings.Contains(state["identity"], "Security Standards") {
+		t.Errorf("identity should contain user-level content, got: %s", state["identity"])
+	}
+	if !strings.Contains(state["state"], "User-level security") {
+		t.Errorf("state should contain user-level content, got: %s", state["state"])
+	}
+	if !strings.Contains(state["project_state"], "Project-specific") {
+		t.Errorf("project_state should contain overlay content, got: %s", state["project_state"])
+	}
+}
+
+func TestResearcherWriteExpertState_SharedExpert_ProjectLayer(t *testing.T) {
+	poolDir, _ := setupSharedResearcherPool(t)
+	srv := buildMCPTestServer(t, poolDir, "researcher", "researcher")
+
+	result := callTool(t, srv, "write_expert_state", map[string]any{
+		"expert":  "security-standards",
+		"content": "Curated project security rules.",
+		"layer":   "project",
+	})
+	text := resultText(t, result)
+
+	if !strings.Contains(text, "project") {
+		t.Errorf("expected project layer confirmation, got: %s", text)
+	}
+
+	// Verify written to overlay dir, not user dir
+	overlayPath := filepath.Join(poolDir, "shared-state", "security-standards", "state.md")
+	data, err := os.ReadFile(overlayPath)
+	if err != nil {
+		t.Fatalf("reading overlay state.md: %v", err)
+	}
+	if !strings.Contains(string(data), "Curated project") {
+		t.Errorf("overlay state.md = %q, want curated content", string(data))
+	}
+}
+
+func TestResearcherPromotePattern_SharedExpert(t *testing.T) {
+	poolDir, fakeHome := setupSharedResearcherPool(t)
+	srv := buildMCPTestServer(t, poolDir, "researcher", "researcher")
+
+	result := callTool(t, srv, "promote_pattern", map[string]any{
+		"expert":  "security-standards",
+		"pattern": "- Always validate CORS headers",
+	})
+	text := resultText(t, result)
+
+	if !strings.Contains(text, "promoted") {
+		t.Errorf("expected promotion confirmation, got: %s", text)
+	}
+
+	// Verify written to user-level identity.md (not pool overlay)
+	userIdentity := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards", "identity.md")
+	data, err := os.ReadFile(userIdentity)
+	if err != nil {
+		t.Fatalf("reading user-level identity.md: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "CORS headers") {
+		t.Error("pattern should be promoted to user-level identity.md")
+	}
+	if !strings.Contains(content, "Security Standards") {
+		t.Error("original identity content should be preserved")
+	}
+}
+
+func TestResearcherListExperts_IncludesShared(t *testing.T) {
+	poolDir, _ := setupSharedResearcherPool(t)
+	srv := buildMCPTestServer(t, poolDir, "researcher", "researcher")
+
+	result := callTool(t, srv, "list_experts", nil)
+	text := resultText(t, result)
+
+	var experts []struct {
+		Name string `json:"name"`
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal([]byte(text), &experts); err != nil {
+		t.Fatalf("unmarshaling: %v", err)
+	}
+
+	// Sort for deterministic checking
+	sort.Slice(experts, func(i, j int) bool { return experts[i].Name < experts[j].Name })
+
+	if len(experts) != 2 {
+		t.Fatalf("expected 2 experts, got %d: %+v", len(experts), experts)
+	}
+
+	// auth should be pool type
+	if experts[0].Name != "auth" || experts[0].Type != "pool" {
+		t.Errorf("expected auth/pool, got %s/%s", experts[0].Name, experts[0].Type)
+	}
+
+	// security-standards should be shared type
+	if experts[1].Name != "security-standards" || experts[1].Type != "shared" {
+		t.Errorf("expected security-standards/shared, got %s/%s", experts[1].Name, experts[1].Type)
 	}
 }

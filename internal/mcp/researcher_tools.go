@@ -67,10 +67,11 @@ func RegisterResearcherTools(srv *server.MCPServer, cfg *ServerConfig) {
 
 	srv.AddTool(
 		mcp.NewTool("write_expert_state",
-			mcp.WithDescription("Write curated state back to an expert. Targets state.md by default. Content must be non-empty and under 50KB."),
+			mcp.WithDescription("Write curated state back to an expert. Targets state.md by default. Content must be non-empty and under 50KB. For shared experts, use layer to target user-level or project-level state."),
 			mcp.WithString("expert", mcp.Required(), mcp.Description("Expert name to write state to")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("New file content")),
 			mcp.WithString("file", mcp.Description("Target file: 'state' (default) or 'errors'")),
+			mcp.WithString("layer", mcp.Description("For shared experts: 'user' (default) or 'project'. Ignored for pool-scoped experts.")),
 		),
 		handleWriteExpertState(cfg),
 	)
@@ -212,6 +213,14 @@ func handleReadExpertState(cfg *ServerConfig) server.ToolHandlerFunc {
 				"state":    state,
 				"errors":   errors,
 			}
+			// For shared experts, include the project overlay state
+			overlayDir := resolveSharedOverlayDir(cfg.PoolDir, expertName)
+			if overlayDir != "" {
+				overlayState := readOverlayState(overlayDir)
+				if overlayState != "" {
+					result["project_state"] = overlayState
+				}
+			}
 			data, err := json.MarshalIndent(result, "", "  ")
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("marshaling: %v", err)), nil
@@ -352,6 +361,15 @@ func handleEnrichState(cfg *ServerConfig) server.ToolHandlerFunc {
 			"recent_logs":  recentLogs,
 		}
 
+		// For shared experts, include project overlay state
+		overlayDir := resolveSharedOverlayDir(cfg.PoolDir, expertName)
+		if overlayDir != "" {
+			overlayState := readOverlayState(overlayDir)
+			if overlayState != "" {
+				result["project_state"] = overlayState
+			}
+		}
+
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("marshaling: %v", err)), nil
@@ -373,15 +391,28 @@ func handleWriteExpertState(cfg *ServerConfig) server.ToolHandlerFunc {
 			return mcp.NewToolResultError("content parameter is required"), nil
 		}
 
-		dir := resolveTargetExpertDir(cfg.PoolDir, expertName)
 		file := request.GetString("file", "state")
+		layer := request.GetString("layer", "user")
+
+		// Resolve write directory: shared experts route by layer
+		dir := resolveTargetExpertDir(cfg.PoolDir, expertName)
+		overlayDir := resolveSharedOverlayDir(cfg.PoolDir, expertName)
+		if overlayDir != "" && layer == "project" && file == "state" {
+			dir = overlayDir
+			// Ensure overlay dir exists
+			os.MkdirAll(dir, 0o755)
+		}
 
 		switch file {
 		case "state", "":
 			if err := expert.WriteState(dir, content); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("writing state.md: %v", err)), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("%s/state.md updated (%d bytes)", expertName, len(content))), nil
+			layerLabel := ""
+			if overlayDir != "" {
+				layerLabel = fmt.Sprintf(" (layer: %s)", layer)
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("%s/state.md updated (%d bytes)%s", expertName, len(content), layerLabel)), nil
 
 		case "errors":
 			// Overwrite errors.md entirely (not append — researcher is curating)
@@ -455,8 +486,38 @@ func handlePromotePattern(cfg *ServerConfig) server.ToolHandlerFunc {
 
 // resolveTargetExpertDir returns the state directory for a target expert.
 // Built-in roles use {poolDir}/{role}/, pool-scoped use {poolDir}/experts/{name}/.
+// For shared experts, returns the user-level directory.
 func resolveTargetExpertDir(poolDir, name string) string {
+	if isSharedExpert(poolDir, name) {
+		dir, err := config.SharedExpertDir(name)
+		if err == nil {
+			return dir
+		}
+	}
 	return mail.ResolveExpertDir(poolDir, name)
+}
+
+// resolveSharedOverlayDir returns the pool-scoped overlay directory for a shared expert.
+// Returns empty string if the expert is not shared.
+func resolveSharedOverlayDir(poolDir, name string) string {
+	if !isSharedExpert(poolDir, name) {
+		return ""
+	}
+	return filepath.Join(poolDir, "shared-state", name)
+}
+
+// isSharedExpert checks whether an expert is in the pool's shared.include list.
+func isSharedExpert(poolDir, name string) bool {
+	poolCfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		return false
+	}
+	for _, n := range poolCfg.Shared.Include {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // readFileOr reads a file and returns its trimmed content, or the fallback if not found.
