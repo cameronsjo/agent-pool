@@ -7,7 +7,7 @@ import (
 	"os/exec"
 )
 
-// ExpertToolNames returns the --allowedTools names for pool MCP tools.
+// ExpertToolNames lists the --allowedTools names for base expert MCP tools.
 // Claude Code requires MCP tools to be explicitly allowed in headless mode.
 // Format: mcp__<server-name>__<tool-name>
 var ExpertToolNames = []string{
@@ -17,6 +17,42 @@ var ExpertToolNames = []string{
 	"mcp__agent-pool__send_response",
 	"mcp__agent-pool__recall",
 	"mcp__agent-pool__search_index",
+}
+
+// ArchitectToolNames lists the architect-specific MCP tool names (in addition
+// to ExpertToolNames).
+var ArchitectToolNames = []string{
+	"mcp__agent-pool__define_contract",
+	"mcp__agent-pool__send_task",
+	"mcp__agent-pool__verify_result",
+	"mcp__agent-pool__amend_contract",
+}
+
+// ResearcherToolNames lists the researcher-specific MCP tool names (in addition
+// to ExpertToolNames).
+var ResearcherToolNames = []string{
+	"mcp__agent-pool__list_experts",
+	"mcp__agent-pool__read_expert_state",
+	"mcp__agent-pool__read_expert_logs",
+	"mcp__agent-pool__enrich_state",
+	"mcp__agent-pool__write_expert_state",
+	"mcp__agent-pool__promote_pattern",
+}
+
+// ToolNamesForRole returns the full set of MCP tool names for the given role.
+// Built-in roles get their role-specific tools appended to ExpertToolNames.
+// Unknown roles (including regular experts) get ExpertToolNames only.
+func ToolNamesForRole(name string) []string {
+	base := make([]string, len(ExpertToolNames))
+	copy(base, ExpertToolNames)
+	switch name {
+	case "architect":
+		return append(base, ArchitectToolNames...)
+	case "researcher":
+		return append(base, ResearcherToolNames...)
+	default:
+		return base
+	}
 }
 
 // MCPConfig is the JSON structure claude expects for --mcp-config.

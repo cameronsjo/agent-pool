@@ -57,6 +57,7 @@ type Daemon struct {
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 	events       *eventBus
 	sharedSet    map[string]bool // cached shared.include lookup set, built once in New
+	curation     *curationScheduler
 }
 
 // Option configures a Daemon.
@@ -112,6 +113,7 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 		spawner:      defaultSpawner{},
 		drainTimeout: 30 * time.Second,
 		events:       newEventBus(),
+		curation:     newCurationScheduler(&cfg.Curation, poolDir, logger),
 	}
 
 	// Build cached shared expert lookup set
@@ -151,10 +153,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("watching postoffice: %w", err)
 	}
 
-	// Watch architect inbox
+	// Watch built-in role inboxes (architect, researcher)
 	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
 	if err := watcher.Add(architectInbox); err != nil {
 		return fmt.Errorf("watching architect inbox: %w", err)
+	}
+	researcherInbox := mail.ResolveInbox(d.poolDir, "researcher")
+	if err := watcher.Add(researcherInbox); err != nil {
+		return fmt.Errorf("watching researcher inbox: %w", err)
 	}
 
 	// Watch approvals directory for human approval requests
@@ -202,6 +208,26 @@ func (d *Daemon) Run(ctx context.Context) error {
 	// Drain pre-existing messages from before the daemon started
 	d.drainPostoffice(childCtx)
 	d.drainAllInboxes(childCtx)
+
+	// Start time-based curation ticker
+	if d.curation.intervalHours > 0 {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			ticker := time.NewTicker(time.Duration(d.curation.intervalHours) * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-childCtx.Done():
+					return
+				case <-ticker.C:
+					if d.curation.ShouldTriggerByTime() {
+						d.triggerCuration("time_interval")
+					}
+				}
+			}
+		}()
+	}
 
 	// Main event loop
 	for {
@@ -630,8 +656,9 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		}
 	}()
 
-	// Append pool MCP tool names so they're pre-approved in headless mode
-	allTools := append(tools, agentmcp.ExpertToolNames...)
+	// Append pool MCP tool names so they're pre-approved in headless mode.
+	// Built-in roles get their role-specific tools in addition to expert tools.
+	allTools := append(tools, agentmcp.ToolNamesForRole(expertName)...)
 
 	cfg := &expert.SpawnConfig{
 		Name:          expertName,
@@ -843,6 +870,12 @@ func (d *Daemon) markTaskCompleted(ctx context.Context, taskID string, exitCode 
 		d.wg.Add(1)
 		go func(e string) { defer d.wg.Done(); d.handleInbox(ctx, e, "") }(expert)
 	}
+
+	// Check curation threshold after task completion
+	if d.curation.RecordTaskCompletion() {
+		d.wg.Add(1)
+		go func() { defer d.wg.Done(); d.triggerCuration("task_threshold") }()
+	}
 }
 
 // markTaskFailed updates a task's status to failed, propagates failure to
@@ -865,9 +898,11 @@ func (d *Daemon) markTaskFailed(taskID string, exitCode int) {
 // drainAllInboxes processes any files sitting in expert and architect inboxes
 // when the daemon starts. Each drains in its own goroutine via handleInbox.
 func (d *Daemon) drainAllInboxes(ctx context.Context) {
-	// Drain architect inbox
+	// Drain built-in role inboxes
 	d.wg.Add(1)
 	go func() { defer d.wg.Done(); d.handleInbox(ctx, "architect", "") }()
+	d.wg.Add(1)
+	go func() { defer d.wg.Done(); d.handleInbox(ctx, "researcher", "") }()
 
 	for name := range d.cfg.Experts {
 		d.wg.Add(1)
@@ -977,6 +1012,13 @@ func (d *Daemon) resolveExpertConfig(name string) (model string, tools []string)
 	if name == "architect" {
 		if d.cfg.Architect.Model != "" {
 			model = d.cfg.Architect.Model
+		}
+		return model, tools
+	}
+
+	if name == "researcher" {
+		if d.cfg.Researcher.Model != "" {
+			model = d.cfg.Researcher.Model
 		}
 		return model, tools
 	}
@@ -1132,6 +1174,13 @@ func (d *Daemon) resolveSessionTimeout(name string) (time.Duration, error) {
 		}
 		return dur, nil
 	}
+	if name == "researcher" && d.cfg.Researcher.SessionTimeout != "" {
+		dur, err := time.ParseDuration(d.cfg.Researcher.SessionTimeout)
+		if err != nil {
+			return 0, fmt.Errorf("parsing researcher.session_timeout %q: %w", d.cfg.Researcher.SessionTimeout, err)
+		}
+		return dur, nil
+	}
 	return d.cfg.Defaults.ParseSessionTimeout()
 }
 
@@ -1162,12 +1211,14 @@ func (d *Daemon) resolveProjectDir() string {
 }
 
 // resolveExpertName extracts the expert name from an inbox directory path.
-// Checks built-in roles (architect) first, then pool-scoped experts.
+// Checks built-in roles first, then pool-scoped experts.
 func (d *Daemon) resolveExpertName(inboxDir string) string {
-	// Check architect first — it's the only built-in role we spawn in v0.4
-	architectInbox := mail.ResolveInbox(d.poolDir, "architect")
-	if absEqual(inboxDir, architectInbox) {
-		return "architect"
+	// Check built-in roles first
+	for _, role := range []string{"architect", "researcher"} {
+		roleInbox := mail.ResolveInbox(d.poolDir, role)
+		if absEqual(inboxDir, roleInbox) {
+			return role
+		}
 	}
 
 	for name := range d.cfg.Experts {
@@ -1199,6 +1250,7 @@ func (d *Daemon) ensureDirs() error {
 		filepath.Join(d.poolDir, "architect", "logs"),
 		filepath.Join(d.poolDir, "architect", "verifications"),
 		filepath.Join(d.poolDir, "researcher", "inbox"),
+		filepath.Join(d.poolDir, "researcher", "logs"),
 		filepath.Join(d.poolDir, "concierge", "inbox"),
 	}
 

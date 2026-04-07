@@ -52,6 +52,7 @@ type DefaultsSection struct {
 	Model          string   `toml:"model"`
 	AllowedTools   []string `toml:"allowed_tools"`
 	SessionTimeout string   `toml:"session_timeout"`
+	LogRetention   int      `toml:"log_retention"`
 }
 
 // CurationSection controls the researcher's curation schedule.
@@ -214,6 +215,9 @@ func LoadPool(poolDir string) (*PoolConfig, error) {
 	}
 	if cfg.Architect.HumanInbox == "" {
 		cfg.Architect.HumanInbox = "stdout"
+	}
+	if cfg.Defaults.LogRetention <= 0 {
+		cfg.Defaults.LogRetention = 50
 	}
 	if cfg.Curation.IntervalTasks == 0 {
 		cfg.Curation.IntervalTasks = 10

@@ -32,6 +32,11 @@
 //   - ArchitectConfigResolution: architect uses opus, auth uses haiku
 //   - ArchitectInboxDrainOnStart: pre-existing inbox message processed on startup
 //   - NotifyRoutedNotRegistered: notify messages route to inbox but skip taskboard
+//
+// Researcher:
+//   - ResearcherSpawn: message to researcher routes and spawns with configured model
+//   - ResearcherConfigResolution: researcher uses haiku, auth uses sonnet
+//   - ResearcherInboxDrainOnStart: pre-existing inbox message processed on startup
 package daemon_test
 
 import (
@@ -2259,5 +2264,226 @@ approval_mode = "none"
 		t.Error("expected auto-approval in none mode")
 	}
 
+	shutdownDaemon(t, cancel, errCh)
+}
+
+// Researcher:
+//   - ResearcherSpawn: message to researcher routes and spawns with configured model
+//   - ResearcherConfigResolution: researcher uses haiku, architect uses opus
+//   - ResearcherInboxDrainOnStart: pre-existing inbox message processed on startup
+
+func TestDaemon_ResearcherSpawn(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[researcher]
+model = "haiku"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Route a message to researcher via postoffice
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-res-001", "architect", "researcher")
+
+	// Wait for spawn
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected researcher spawn, got none")
+	}
+
+	call := calls[0]
+	if call.Name != "researcher" {
+		t.Errorf("spawn name = %q, want researcher", call.Name)
+	}
+	if call.Model != "haiku" {
+		t.Errorf("spawn model = %q, want haiku", call.Model)
+	}
+	if call.TaskMessage.ID != "task-res-001" {
+		t.Errorf("task ID = %q, want task-res-001", call.TaskMessage.ID)
+	}
+
+	// Verify log file written to researcher dir (not experts/researcher)
+	logPath := filepath.Join(poolDir, "researcher", "logs", "task-res-001.json")
+	deadline = time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(logPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Error("log should be written to researcher/logs/, not experts/researcher/logs/")
+	}
+
+	waitForTaskStatus(t, poolDir, "task-res-001", taskboard.StatusCompleted)
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ResearcherConfigResolution(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[defaults]
+model = "sonnet"
+
+[architect]
+model = "opus"
+
+[researcher]
+model = "haiku"
+session_timeout = "15m"
+
+[experts.auth]
+model = "sonnet"
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// Route to researcher
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-cfg-res", "architect", "researcher")
+	// Route to auth
+	writeMessage(t, filepath.Join(poolDir, "postoffice"), "task-cfg-auth2", "architect", "auth")
+
+	// Wait for both spawns
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) >= 2 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) < 2 {
+		t.Fatalf("expected 2 spawns, got %d", len(calls))
+	}
+
+	for _, c := range calls {
+		switch c.Name {
+		case "researcher":
+			if c.Model != "haiku" {
+				t.Errorf("researcher model = %q, want haiku", c.Model)
+			}
+		case "auth":
+			if c.Model != "sonnet" {
+				t.Errorf("auth model = %q, want sonnet", c.Model)
+			}
+		}
+	}
+
+	waitForTaskStatus(t, poolDir, "task-cfg-res", taskboard.StatusCompleted)
+	waitForTaskStatus(t, poolDir, "task-cfg-auth2", taskboard.StatusCompleted)
+	shutdownDaemon(t, cancel, errCh)
+}
+
+func TestDaemon_ResearcherInboxDrainOnStart(t *testing.T) {
+	poolDir := t.TempDir()
+
+	poolToml := `[pool]
+name = "test-pool"
+project_dir = "` + poolDir + `"
+
+[researcher]
+model = "haiku"
+
+[experts.auth]
+`
+	os.WriteFile(filepath.Join(poolDir, "pool.toml"), []byte(poolToml), 0o644)
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		t.Fatalf("LoadPool: %v", err)
+	}
+
+	// Pre-create inbox and put a message there before daemon starts
+	researcherInbox := filepath.Join(poolDir, "researcher", "inbox")
+	os.MkdirAll(researcherInbox, 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "researcher", "logs"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "architect", "inbox"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "architect", "logs"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "postoffice"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "experts", "auth", "inbox"), 0o755)
+	os.MkdirAll(filepath.Join(poolDir, "experts", "auth", "logs"), 0o755)
+
+	writeMessage(t, researcherInbox, "task-predrain-res", "architect", "researcher")
+
+	fake := &fakeSpawner{}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	d := daemon.New(cfg, poolDir, logger, daemon.WithSpawner(fake))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- d.Run(ctx) }()
+
+	// Wait for drain to process pre-existing message
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(fake.getCalls()) > 0 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected pre-existing researcher inbox message to be processed on startup")
+	}
+
+	if calls[0].Name != "researcher" {
+		t.Errorf("spawn name = %q, want researcher", calls[0].Name)
+	}
+
+	waitForTaskStatus(t, poolDir, "task-predrain-res", taskboard.StatusCompleted)
 	shutdownDaemon(t, cancel, errCh)
 }

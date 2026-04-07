@@ -8,6 +8,12 @@
 //
 // WriteTempConfigShared:
 //   - Creates valid JSON with --shared true in args
+//
+// ToolNamesForRole:
+//   - Architect: expert + architect tools
+//   - Researcher: expert + researcher tools
+//   - Unknown/expert: expert tools only
+//   - Returned slice is a copy (mutation-safe)
 
 package mcp_test
 
@@ -110,4 +116,79 @@ func TestWriteTempConfigShared_IncludesSharedFlag(t *testing.T) {
 			t.Errorf("Args[%d] = %q, want %q", i, entry.Args[i], want)
 		}
 	}
+}
+
+func TestToolNamesForRole_Architect(t *testing.T) {
+	names := agentmcp.ToolNamesForRole("architect")
+
+	// Should include all expert tools
+	for _, tool := range agentmcp.ExpertToolNames {
+		if !contains(names, tool) {
+			t.Errorf("missing expert tool %q", tool)
+		}
+	}
+
+	// Should include all architect tools
+	for _, tool := range agentmcp.ArchitectToolNames {
+		if !contains(names, tool) {
+			t.Errorf("missing architect tool %q", tool)
+		}
+	}
+
+	// Should NOT include researcher tools
+	for _, tool := range agentmcp.ResearcherToolNames {
+		if contains(names, tool) {
+			t.Errorf("unexpected researcher tool %q in architect role", tool)
+		}
+	}
+}
+
+func TestToolNamesForRole_Researcher(t *testing.T) {
+	names := agentmcp.ToolNamesForRole("researcher")
+
+	for _, tool := range agentmcp.ExpertToolNames {
+		if !contains(names, tool) {
+			t.Errorf("missing expert tool %q", tool)
+		}
+	}
+
+	for _, tool := range agentmcp.ResearcherToolNames {
+		if !contains(names, tool) {
+			t.Errorf("missing researcher tool %q", tool)
+		}
+	}
+
+	for _, tool := range agentmcp.ArchitectToolNames {
+		if contains(names, tool) {
+			t.Errorf("unexpected architect tool %q in researcher role", tool)
+		}
+	}
+}
+
+func TestToolNamesForRole_Expert(t *testing.T) {
+	names := agentmcp.ToolNamesForRole("auth")
+
+	if len(names) != len(agentmcp.ExpertToolNames) {
+		t.Errorf("got %d tools, want %d (expert tools only)", len(names), len(agentmcp.ExpertToolNames))
+	}
+}
+
+func TestToolNamesForRole_ReturnsCopy(t *testing.T) {
+	names1 := agentmcp.ToolNamesForRole("researcher")
+	names2 := agentmcp.ToolNamesForRole("researcher")
+
+	// Mutating one should not affect the other
+	names1[0] = "mutated"
+	if names2[0] == "mutated" {
+		t.Error("ToolNamesForRole should return independent copies")
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

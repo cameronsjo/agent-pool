@@ -56,6 +56,8 @@ func buildMCPTestServer(t *testing.T, poolDir, expertName, role string) *server.
 		agentmcp.RegisterArchitectTools(srv, cfg)
 	case "concierge":
 		agentmcp.RegisterConciergeTools(srv, cfg)
+	case "researcher":
+		agentmcp.RegisterResearcherTools(srv, cfg)
 	}
 
 	initMsg := mustJSON(t, map[string]any{

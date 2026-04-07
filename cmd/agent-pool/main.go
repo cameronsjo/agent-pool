@@ -19,6 +19,7 @@ import (
 	"github.com/cameronsjo/agent-pool/internal/config"
 	"github.com/cameronsjo/agent-pool/internal/daemon"
 	"github.com/cameronsjo/agent-pool/internal/hooks"
+	"github.com/cameronsjo/agent-pool/internal/mail"
 	agentmcp "github.com/cameronsjo/agent-pool/internal/mcp"
 )
 
@@ -43,6 +44,8 @@ func main() {
 		cmdFlush()
 	case "guard":
 		cmdGuard()
+	case "seed":
+		cmdSeed()
 	case "version":
 		fmt.Println("agent-pool v0.6.0-dev")
 	case "help", "--help", "-h":
@@ -563,6 +566,97 @@ func parseFlagsFromArgs(args []string, names ...string) map[string]string {
 	return result
 }
 
+func cmdSeed() {
+	flags := parseFlags(2, "pool", "expert")
+
+	poolDir := flags["pool"]
+	expertName := flags["expert"]
+
+	if expertName == "" {
+		fmt.Fprintf(os.Stderr, "usage: agent-pool seed --pool <dir> --expert <name>\n")
+		os.Exit(1)
+	}
+
+	var err error
+	if poolDir == "" {
+		poolDir, err = config.DiscoverPoolDir("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading pool config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Validate expert exists in pool config or shared includes
+	found := false
+	if _, ok := cfg.Experts[expertName]; ok {
+		found = true
+	}
+	for _, name := range cfg.Shared.Include {
+		if name == expertName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintf(os.Stderr, "error: expert %q not found in pool config (check [experts] or [shared] sections)\n", expertName)
+		os.Exit(1)
+	}
+
+	// Read identity if available (gives the researcher context)
+	var identityContext string
+	expertDir := mail.ResolveExpertDir(poolDir, expertName)
+	if data, readErr := os.ReadFile(filepath.Join(expertDir, "identity.md")); readErr == nil {
+		identityContext = string(data)
+	}
+
+	// Compose seed task
+	var body strings.Builder
+	body.WriteString("## Cold-Start Seed Task\n\n")
+	body.WriteString(fmt.Sprintf("**Target expert:** %s\n\n", expertName))
+
+	if cfg.Pool.ProjectDir != "" {
+		body.WriteString(fmt.Sprintf("**Project directory:** %s\n\n", cfg.Pool.ProjectDir))
+	}
+
+	if identityContext != "" {
+		body.WriteString("### Expert Identity\n\n")
+		body.WriteString(identityContext)
+		body.WriteString("\n\n")
+	}
+
+	body.WriteString("### Instructions\n\n")
+	body.WriteString("Explore the project codebase and create initial state.md for this expert.\n")
+	body.WriteString("Focus on:\n")
+	body.WriteString("- Key files and patterns relevant to this expert's domain\n")
+	body.WriteString("- Important APIs, endpoints, or interfaces\n")
+	body.WriteString("- Current status of the domain (what works, what's in progress)\n")
+	body.WriteString("- Any conventions or gotchas specific to this area\n\n")
+	body.WriteString("Use `write_expert_state` to save the initial state.\n")
+
+	msg := &mail.Message{
+		ID:        fmt.Sprintf("seed-%s-%d", expertName, time.Now().UnixMilli()),
+		From:      "cli",
+		To:        "researcher",
+		Type:      mail.TypeTask,
+		Priority:  mail.PriorityNormal,
+		Timestamp: time.Now().UTC(),
+		Body:      body.String(),
+	}
+
+	if err := mail.Post(poolDir, msg); err != nil {
+		fmt.Fprintf(os.Stderr, "error posting seed task: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Seed task posted for expert %q (id: %s)\n", expertName, msg.ID)
+}
+
 func printUsage() {
 	fmt.Println(`agent-pool — process supervisor for Claude Code expert sessions
 
@@ -573,6 +667,7 @@ Usage:
   agent-pool watch [pool-dir]                          Stream daemon events
   agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
   agent-pool mcp --pool <dir> --role <role>            Start built-in role MCP server
+  agent-pool seed --pool <dir> --expert <name>                Cold-start expert state via researcher
   agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state
   agent-pool guard --pool <dir> --expert <name> --path <file> PreToolUse hook: ownership guard
   agent-pool version                                   Print version
