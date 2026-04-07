@@ -54,7 +54,7 @@ New `instantiate_formula` tool registered in `RegisterArchitectTools`.
 
 ### Tool Schema
 
-```
+```text
 instantiate_formula
   formula:    string (required) — formula name (filename without .toml)
   prefix:     string (required) — ID prefix for generated tasks (e.g., "feat-auth")
@@ -154,9 +154,9 @@ Phases 1 and 3 can be developed in parallel, but I'll do them sequentially since
 - **Chicago-school tests**: real objects, fakes only at I/O boundaries
 - **Error wrapping**: `fmt.Errorf("context: %w", err)`
 - **Atomic writes**: `atomicfile.WriteFile` for all daemon-consumed files
-- **Reuse `postMessage`** (`internal/mcp/postoffice.go:15`) for formula instantiation
-- **Reuse `splitCSV`** (`internal/mcp/architect_tools.go:301`) for parsing parameters
-- **MCP tool registration** follows `RegisterArchitectTools` pattern (`:23`)
+- **Reuse `postMessage`** (`internal/mcp/postoffice.go`) for formula instantiation
+- **Reuse `splitCSV`** (`internal/mcp/architect_tools.go`) for parsing parameters
+- **MCP tool registration** follows `RegisterArchitectTools` pattern
 - **Event bus** emits at slog log points — add events for new behaviors
 
 ## Verification

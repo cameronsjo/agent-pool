@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -35,7 +36,9 @@ type Watcher struct {
 	fsw    *fsnotify.Watcher
 	events chan WatcherEvent
 	logger *slog.Logger
-	dirs   map[string]bool // tracked directories for Dir resolution
+
+	mu   sync.Mutex
+	dirs map[string]bool // tracked directories for Dir resolution
 }
 
 const (
@@ -60,12 +63,15 @@ func NewWatcher(logger *slog.Logger) (*Watcher, error) {
 }
 
 // Add registers a directory to watch. The directory must exist.
+// Safe to call concurrently with Run (dirs map is guarded by w.mu).
 func (w *Watcher) Add(dir string) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
+	w.mu.Lock()
 	w.dirs[absDir] = true
+	w.mu.Unlock()
 	return w.fsw.Add(absDir)
 }
 
@@ -159,10 +165,9 @@ func (w *Watcher) Close() error {
 func (w *Watcher) resolveDir(path string) string {
 	absPath, _ := filepath.Abs(path)
 	dir := filepath.Dir(absPath)
-	if w.dirs[dir] {
-		return dir
-	}
-	// Fallback — shouldn't happen if all watched dirs are registered
+	w.mu.Lock()
+	_ = w.dirs[dir] // lookup under lock for race safety
+	w.mu.Unlock()
 	return dir
 }
 

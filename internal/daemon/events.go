@@ -73,6 +73,7 @@ type ConfigReloadedData struct {
 	ExpertsAdded   []string `json:"experts_added,omitempty"`
 	ExpertsRemoved []string `json:"experts_removed,omitempty"`
 }
+
 // EventBufSize is the subscriber channel buffer capacity. Subscribers that
 // can't keep up will miss events once the buffer fills (non-blocking emit).
 const EventBufSize = 64

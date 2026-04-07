@@ -1313,8 +1313,9 @@ func (d *Daemon) ensureDirs() error {
 // On parse/validation failure, the old config is kept and a warning is logged.
 // The watcher parameter is used to add inbox watches for new experts.
 //
-// The entire reload (config swap, dir creation, watcher setup) runs under d.mu
-// to prevent concurrent goroutines from seeing partially applied state.
+// The lock is held only for the config swap and diff. Filesystem I/O (dir
+// creation, watcher registration) runs outside the lock to avoid blocking
+// concurrent goroutines that need d.mu (registerTask, handleInbox, etc.).
 func (d *Daemon) reloadConfig(watcher *Watcher) {
 	newCfg, err := config.LoadPool(d.poolDir)
 	if err != nil {
@@ -1324,6 +1325,7 @@ func (d *Daemon) reloadConfig(watcher *Watcher) {
 		return
 	}
 
+	// Phase 1: Swap config and compute diff under lock (fast, no I/O)
 	d.mu.Lock()
 	oldCfg := d.cfg
 	d.cfg = newCfg
@@ -1334,48 +1336,101 @@ func (d *Daemon) reloadConfig(watcher *Watcher) {
 		d.sharedSet[name] = true
 	}
 
-	// Diff experts: find added and removed
+	// Rebuild curation scheduler with new thresholds
+	d.curation = newCurationScheduler(&newCfg.Curation, d.poolDir, d.logger)
+
+	// Diff pool-scoped experts
 	oldExperts := make(map[string]bool, len(oldCfg.Experts))
 	for name := range oldCfg.Experts {
 		oldExperts[name] = true
 	}
-
-	var added, removed []string
+	var addedExperts, removedExperts []string
 	for name := range newCfg.Experts {
 		if !oldExperts[name] {
-			added = append(added, name)
+			addedExperts = append(addedExperts, name)
 		}
 	}
 	for name := range oldExperts {
 		if _, ok := newCfg.Experts[name]; !ok {
-			removed = append(removed, name)
+			removedExperts = append(removedExperts, name)
 		}
 	}
 
-	// Create dirs and watch new expert inboxes (under lock to prevent races)
-	var setupFailed bool
-	if len(added) > 0 {
-		if err := d.ensureDirs(); err != nil {
-			d.logger.Error("Failed to create directories for new experts",
-				"error", err,
-			)
-			setupFailed = true
+	// Diff shared experts
+	oldShared := make(map[string]bool, len(oldCfg.Shared.Include))
+	for _, name := range oldCfg.Shared.Include {
+		oldShared[name] = true
+	}
+	var addedShared, removedShared []string
+	for _, name := range newCfg.Shared.Include {
+		if !oldShared[name] {
+			addedShared = append(addedShared, name)
 		}
-		for _, name := range added {
-			inboxDir := mail.ResolveInbox(d.poolDir, name)
-			if err := watcher.Add(inboxDir); err != nil {
-				d.logger.Error("Failed to watch new expert inbox",
-					"expert", name,
-					"error", err,
-				)
-				setupFailed = true
-			}
+	}
+	for _, name := range oldCfg.Shared.Include {
+		if !d.sharedSet[name] {
+			removedShared = append(removedShared, name)
 		}
 	}
 
 	d.mu.Unlock()
 
-	// Log removed experts (don't delete dirs — data preservation)
+	added := append(addedExperts, addedShared...)
+	removed := append(removedExperts, removedShared...)
+
+	// Phase 2: Filesystem setup outside the lock (slow I/O)
+	var setupFailed bool
+
+	// Pool-scoped expert dirs + watchers
+	for _, name := range addedExperts {
+		expertBase := filepath.Join(d.poolDir, "experts", name)
+		for _, sub := range []string{"inbox", "logs"} {
+			if err := os.MkdirAll(filepath.Join(expertBase, sub), 0o755); err != nil {
+				d.logger.Error("Failed to create directory for new expert",
+					"expert", name,
+					"dir", sub,
+					"error", err,
+				)
+				setupFailed = true
+			}
+		}
+		inboxDir := mail.ResolveInbox(d.poolDir, name)
+		if err := watcher.Add(inboxDir); err != nil {
+			d.logger.Error("Failed to watch new expert inbox",
+				"expert", name,
+				"error", err,
+			)
+			setupFailed = true
+		}
+	}
+
+	// Shared expert dirs + watchers
+	for _, name := range addedShared {
+		inboxDir := mail.ResolveSharedInbox(d.poolDir, name)
+		if err := os.MkdirAll(inboxDir, 0o755); err != nil {
+			d.logger.Error("Failed to create shared inbox directory",
+				"expert", name,
+				"error", err,
+			)
+			setupFailed = true
+		}
+		logDir := mail.ResolveSharedLogDir(d.poolDir, name)
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			d.logger.Error("Failed to create shared log directory",
+				"expert", name,
+				"error", err,
+			)
+			setupFailed = true
+		}
+		if err := watcher.Add(inboxDir); err != nil {
+			d.logger.Error("Failed to watch shared expert inbox",
+				"expert", name,
+				"error", err,
+			)
+			setupFailed = true
+		}
+	}
+
 	for _, name := range removed {
 		d.logger.Info("Expert removed from config (inbox preserved)",
 			"expert", name,

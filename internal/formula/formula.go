@@ -134,15 +134,12 @@ func detectCycle(steps []Step) []string {
 	dependents := make(map[string][]string) // dep → steps that depend on it
 
 	for _, s := range steps {
-		if _, ok := inDegree[s.ID]; !ok {
-			inDegree[s.ID] = 0
-		}
+		inDegree[s.ID] = 0
+	}
+	for _, s := range steps {
 		for _, dep := range s.DependsOn {
 			inDegree[s.ID]++
 			dependents[dep] = append(dependents[dep], s.ID)
-			if _, ok := inDegree[dep]; !ok {
-				inDegree[dep] = 0
-			}
 		}
 	}
 
