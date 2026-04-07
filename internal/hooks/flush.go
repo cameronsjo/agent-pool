@@ -20,6 +20,7 @@ type FlushConfig struct {
 	PoolDir    string
 	ExpertName string
 	TaskID     string
+	IsShared   bool // true for shared experts (user-level identity + pool overlay)
 }
 
 // Flush is the Stop hook safety net. It verifies that state.md was updated
@@ -42,7 +43,16 @@ func Flush(logger *slog.Logger, cfg *FlushConfig) error {
 		return fmt.Errorf("invalid expert name %q: must not contain path separators", cfg.ExpertName)
 	}
 
-	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+	var expertDir string
+	if cfg.IsShared {
+		dir, resolveErr := mail.ResolveSharedExpertDir(cfg.ExpertName)
+		if resolveErr != nil {
+			return fmt.Errorf("resolving shared expert dir: %w", resolveErr)
+		}
+		expertDir = dir
+	} else {
+		expertDir = mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+	}
 	statePath := filepath.Join(expertDir, "state.md")
 
 	info, err := os.Stat(statePath)

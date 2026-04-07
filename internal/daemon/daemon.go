@@ -56,6 +56,7 @@ type Daemon struct {
 	startedAt    time.Time
 	sockPathOver string // overrides default socket path (for tests with long TempDir paths)
 	events       *eventBus
+	sharedSet    map[string]bool // cached shared.include lookup set, built once in New
 }
 
 // Option configures a Daemon.
@@ -112,6 +113,15 @@ func New(cfg *config.PoolConfig, poolDir string, logger *slog.Logger, opts ...Op
 		drainTimeout: 30 * time.Second,
 		events:       newEventBus(),
 	}
+
+	// Build cached shared expert lookup set
+	if len(cfg.Shared.Include) > 0 {
+		d.sharedSet = make(map[string]bool, len(cfg.Shared.Include))
+		for _, name := range cfg.Shared.Include {
+			d.sharedSet[name] = true
+		}
+	}
+
 	for _, opt := range opts {
 		opt(d)
 	}
@@ -158,6 +168,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		inboxDir := mail.ResolveInbox(d.poolDir, name)
 		if err := watcher.Add(inboxDir); err != nil {
 			return fmt.Errorf("watching inbox for %s: %w", name, err)
+		}
+	}
+
+	// Watch shared expert inboxes (pool-scoped under shared-state/)
+	for _, name := range d.cfg.Shared.Include {
+		inboxDir := mail.ResolveSharedInbox(d.poolDir, name)
+		if err := watcher.Add(inboxDir); err != nil {
+			return fmt.Errorf("watching shared inbox for %s: %w", name, err)
 		}
 	}
 
@@ -256,7 +274,7 @@ func (d *Daemon) handlePostoffice(ctx context.Context, path string) {
 	}
 
 	// Non-cancel: route to recipient inbox.
-	routed, err := mail.Route(d.logger, d.poolDir, path)
+	routed, err := mail.Route(d.logger, d.poolDir, path, d.sharedNamesMap())
 	if err != nil {
 		d.logger.Error("Failed to route message",
 			"path", path,
@@ -366,7 +384,13 @@ func (d *Daemon) handleCancel(msg *mail.Message, cancelPath string) {
 		d.mu.Unlock()
 
 		// Remove the inbox file for this task if it exists.
-		inboxPath := filepath.Join(mail.ResolveInbox(d.poolDir, task.Expert), targetID+".md")
+		var cancelInboxDir string
+		if d.isSharedExpert(task.Expert) {
+			cancelInboxDir = mail.ResolveSharedInbox(d.poolDir, task.Expert)
+		} else {
+			cancelInboxDir = mail.ResolveInbox(d.poolDir, task.Expert)
+		}
+		inboxPath := filepath.Join(cancelInboxDir, targetID+".md")
 		if err := os.Remove(inboxPath); err != nil && !os.IsNotExist(err) {
 			d.logger.Warn("Failed to remove inbox file for cancelled task",
 				"task_id", targetID,
@@ -557,12 +581,34 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		Data:      ExpertSpawningData{Expert: expertName, TaskID: msg.ID, Model: model},
 	})
 	projectDir := d.resolveProjectDir()
-	expertDir := d.resolveExpertDir(expertName)
+
+	// Resolve directories: shared experts use user-level identity + pool overlay
+	var expertDir, overlayDir, logDir string
+	if d.isSharedExpert(expertName) {
+		userDir, resolveErr := mail.ResolveSharedExpertDir(expertName)
+		if resolveErr != nil {
+			d.logger.Error("Failed to resolve shared expert directory",
+				"expert", expertName,
+				"task_id", msg.ID,
+				"error", resolveErr,
+			)
+			d.markTaskFailed(msg.ID, -1)
+			return false
+		}
+		expertDir = userDir
+		overlayDir = filepath.Join(d.poolDir, "shared-state", expertName)
+		logDir = overlayDir // WriteLog/AppendIndex create logs/ subdir inside this
+	} else {
+		expertDir = d.resolveExpertDir(expertName)
+		logDir = expertDir
+	}
 
 	var mcpConfigPath string
 	var mcpErr error
 	if mail.IsBuiltinRole(expertName) {
 		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigForRole(d.poolDir, expertName)
+	} else if d.isSharedExpert(expertName) {
+		mcpConfigPath, mcpErr = agentmcp.WriteTempConfigShared(d.poolDir, expertName)
 	} else {
 		mcpConfigPath, mcpErr = agentmcp.WriteTempConfig(d.poolDir, expertName)
 	}
@@ -593,6 +639,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		AllowedTools:  allTools,
 		ProjectDir:    projectDir,
 		ExpertDir:     expertDir,
+		OverlayDir:    overlayDir,
 		PoolDir:       d.poolDir,
 		TaskMessage:   msg,
 		MCPConfigPath: mcpConfigPath,
@@ -625,8 +672,9 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		return false
 	}
 
-	// Always write logs — the archive is append-only by design
-	if err := expert.WriteLog(expertDir, result.TaskID, result.Output); err != nil {
+	// Always write logs — the archive is append-only by design.
+	// For shared experts, logs go to pool-scoped shared-state dir.
+	if err := expert.WriteLog(logDir, result.TaskID, result.Output); err != nil {
 		d.logger.Error("Failed to write task log",
 			"expert", expertName,
 			"task_id", result.TaskID,
@@ -635,7 +683,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 	}
 
 	if len(result.Stderr) > 0 {
-		if err := expert.WriteStderr(expertDir, result.TaskID, result.Stderr); err != nil {
+		if err := expert.WriteStderr(logDir, result.TaskID, result.Stderr); err != nil {
 			d.logger.Error("Failed to write stderr log",
 				"expert", expertName,
 				"task_id", result.TaskID,
@@ -644,7 +692,7 @@ func (d *Daemon) processInboxMessage(ctx context.Context, expertName string, pat
 		}
 	}
 
-	if err := expert.AppendIndex(expertDir, &expert.LogEntry{
+	if err := expert.AppendIndex(logDir, &expert.LogEntry{
 		TaskID:    result.TaskID,
 		Timestamp: msg.Timestamp,
 		From:      msg.From,
@@ -825,13 +873,24 @@ func (d *Daemon) drainAllInboxes(ctx context.Context) {
 		d.wg.Add(1)
 		go func(n string) { defer d.wg.Done(); d.handleInbox(ctx, n, "") }(name)
 	}
+
+	// Drain shared expert inboxes
+	for _, name := range d.cfg.Shared.Include {
+		d.wg.Add(1)
+		go func(n string) { defer d.wg.Done(); d.handleInbox(ctx, n, "") }(name)
+	}
 }
 
 // drainInbox iteratively processes all .md files in an expert's inbox (oldest
 // first). It reads the file list once and processes each in order. Files that
 // fail to parse are skipped (logged and left in inbox for manual inspection).
 func (d *Daemon) drainInbox(ctx context.Context, expertName string) {
-	inboxDir := mail.ResolveInbox(d.poolDir, expertName)
+	var inboxDir string
+	if d.isSharedExpert(expertName) {
+		inboxDir = mail.ResolveSharedInbox(d.poolDir, expertName)
+	} else {
+		inboxDir = mail.ResolveInbox(d.poolDir, expertName)
+	}
 
 	// Track files we've already attempted so we don't loop forever on
 	// non-zero exit files (which are preserved in inbox).
@@ -1117,6 +1176,15 @@ func (d *Daemon) resolveExpertName(inboxDir string) string {
 			return name
 		}
 	}
+
+	// Check shared expert inboxes
+	for _, name := range d.cfg.Shared.Include {
+		expected := mail.ResolveSharedInbox(d.poolDir, name)
+		if absEqual(inboxDir, expected) {
+			return name
+		}
+	}
+
 	return ""
 }
 
@@ -1142,13 +1210,47 @@ func (d *Daemon) ensureDirs() error {
 		)
 	}
 
+	// Shared experts get pool-scoped shared-state directories for inbox and logs.
+	// Identity and user-level state live at ~/.agent-pool/experts/{name}/ (not created here).
+	for _, name := range d.cfg.Shared.Include {
+		dirs = append(dirs,
+			mail.ResolveSharedInbox(d.poolDir, name),
+			mail.ResolveSharedLogDir(d.poolDir, name),
+		)
+	}
+
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("creating %s: %w", dir, err)
 		}
 	}
 
+	// Warn if shared expert user-level directory is missing identity.md
+	for _, name := range d.cfg.Shared.Include {
+		userDir, resolveErr := mail.ResolveSharedExpertDir(name)
+		if resolveErr != nil {
+			continue
+		}
+		identityPath := filepath.Join(userDir, "identity.md")
+		if _, err := os.Stat(identityPath); os.IsNotExist(err) {
+			d.logger.Warn("Shared expert missing identity.md at user level",
+				"expert", name,
+				"expected", identityPath,
+			)
+		}
+	}
+
 	return nil
+}
+
+// sharedNamesMap returns the cached shared expert lookup set. May be nil.
+func (d *Daemon) sharedNamesMap() map[string]bool {
+	return d.sharedSet
+}
+
+// isSharedExpert reports whether the named expert is in the pool's shared.include list.
+func (d *Daemon) isSharedExpert(name string) bool {
+	return d.sharedSet[name]
 }
 
 // absEqual compares two paths after resolving to absolute form.

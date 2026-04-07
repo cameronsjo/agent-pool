@@ -660,6 +660,154 @@ func TestAssemblePrompt_NilConfig(t *testing.T) {
 	}
 }
 
+func TestAssemblePrompt_WithOverlay(t *testing.T) {
+	expertDir := t.TempDir()
+	overlayDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(expertDir, "identity.md"), []byte("I am the security expert."), 0o644)
+	os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("User-level state: OWASP top 10 checklist."), 0o644)
+	os.WriteFile(filepath.Join(overlayDir, "state.md"), []byte("Project-level state: API gateway audit pending."), 0o644)
+	os.WriteFile(filepath.Join(expertDir, "errors.md"), []byte("- False positive on CORS check"), 0o644)
+
+	cfg := &expert.SpawnConfig{
+		Name:       "security-standards",
+		ExpertDir:  expertDir,
+		OverlayDir: overlayDir,
+		TaskMessage: &mail.Message{
+			ID:   "task-sec-001",
+			From: "architect",
+			Type: mail.TypeTask,
+			Body: "Review the auth module.",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Both state sections present under separate headings
+	for _, want := range []string{
+		"## Expert Identity",
+		"I am the security expert.",
+		"## Current State",
+		"User-level state: OWASP top 10 checklist.",
+		"## Project State",
+		"Project-level state: API gateway audit pending.",
+		"## Known Errors & Pitfalls",
+		"False positive on CORS check",
+		"## Task",
+		"Review the auth module.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+
+	// Project State appears after Current State
+	stateIdx := strings.Index(prompt, "## Current State")
+	projectIdx := strings.Index(prompt, "## Project State")
+	if projectIdx <= stateIdx {
+		t.Error("## Project State should appear after ## Current State")
+	}
+}
+
+func TestAssemblePrompt_OverlayOnly(t *testing.T) {
+	expertDir := t.TempDir()
+	overlayDir := t.TempDir()
+
+	// No user-level state.md, only overlay
+	os.WriteFile(filepath.Join(expertDir, "identity.md"), []byte("I am the expert."), 0o644)
+	os.WriteFile(filepath.Join(overlayDir, "state.md"), []byte("Project-specific knowledge."), 0o644)
+
+	cfg := &expert.SpawnConfig{
+		Name:       "shared-expert",
+		ExpertDir:  expertDir,
+		OverlayDir: overlayDir,
+		TaskMessage: &mail.Message{
+			ID:   "task-overlay",
+			From: "architect",
+			Type: mail.TypeTask,
+			Body: "Do the thing.",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if strings.Contains(prompt, "## Current State") {
+		t.Error("should not have Current State section when user-level state.md is missing")
+	}
+	if !strings.Contains(prompt, "## Project State") {
+		t.Error("should have Project State section from overlay")
+	}
+}
+
+func TestAssemblePrompt_OverlayDirSetButNoFile(t *testing.T) {
+	expertDir := t.TempDir()
+	overlayDir := t.TempDir() // exists but no state.md
+
+	os.WriteFile(filepath.Join(expertDir, "identity.md"), []byte("Expert identity."), 0o644)
+	os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("User state."), 0o644)
+
+	cfg := &expert.SpawnConfig{
+		Name:       "shared-expert",
+		ExpertDir:  expertDir,
+		OverlayDir: overlayDir,
+		TaskMessage: &mail.Message{
+			ID:   "task-no-overlay",
+			From: "architect",
+			Type: mail.TypeTask,
+			Body: "Do the thing.",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "## Current State") {
+		t.Error("should have Current State from user-level state")
+	}
+	if strings.Contains(prompt, "## Project State") {
+		t.Error("should not have Project State when overlay state.md is missing")
+	}
+}
+
+func TestAssemblePrompt_EmptyOverlayDir(t *testing.T) {
+	expertDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(expertDir, "identity.md"), []byte("Expert."), 0o644)
+	os.WriteFile(filepath.Join(expertDir, "state.md"), []byte("User state."), 0o644)
+
+	cfg := &expert.SpawnConfig{
+		Name:       "pool-scoped",
+		ExpertDir:  expertDir,
+		OverlayDir: "", // empty = no overlay (pool-scoped expert)
+		TaskMessage: &mail.Message{
+			ID:   "task-no-overlay",
+			From: "architect",
+			Type: mail.TypeTask,
+			Body: "Do the thing.",
+		},
+	}
+
+	prompt, err := expert.AssemblePrompt(cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(prompt, "## Current State") {
+		t.Error("should have Current State")
+	}
+	if strings.Contains(prompt, "## Project State") {
+		t.Error("should not have Project State when OverlayDir is empty")
+	}
+}
+
 func TestAppendIndex_SanitizesAllCells(t *testing.T) {
 	dir := t.TempDir()
 	entry := &expert.LogEntry{

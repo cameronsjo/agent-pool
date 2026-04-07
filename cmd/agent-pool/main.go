@@ -431,11 +431,12 @@ func connectAndSend(sockPath, method string) (*socketResponse, error) {
 //	agent-pool mcp --pool <dir> --expert <name>         Expert MCP server
 //	agent-pool mcp --pool <dir> --role <architect>      Built-in role MCP server
 func cmdMCP() {
-	flags := parseFlags(2, "pool", "expert", "role")
+	flags := parseFlags(2, "pool", "expert", "role", "shared")
 
 	poolDir := flags["pool"]
 	expertName := flags["expert"]
 	role := flags["role"]
+	isShared := flags["shared"] == "true"
 
 	// --role and --expert are mutually exclusive
 	if role != "" && expertName != "" {
@@ -456,7 +457,12 @@ func cmdMCP() {
 		PoolDir:    poolDir,
 		ExpertName: expertName,
 		Role:       role,
+		IsShared:   isShared,
 		Logger:     newStderrLogger(),
+	}
+
+	if isShared {
+		cfg.SharedOverlayDir = filepath.Join(poolDir, "shared-state", expertName)
 	}
 
 	// Load pool config to get approval mode for architect.
@@ -478,11 +484,12 @@ func cmdMCP() {
 }
 
 func cmdFlush() {
-	flags := parseFlags(2, "pool", "expert", "task")
+	flags := parseFlags(2, "pool", "expert", "task", "shared")
 
 	poolDir := flags["pool"]
 	expertName := flags["expert"]
 	taskID := flags["task"]
+	isShared := flags["shared"] == "true"
 
 	if poolDir == "" || expertName == "" {
 		fmt.Fprintf(os.Stderr, "usage: agent-pool flush --pool <dir> --expert <name> --task <id>\n")
@@ -493,6 +500,7 @@ func cmdFlush() {
 		PoolDir:    poolDir,
 		ExpertName: expertName,
 		TaskID:     taskID,
+		IsShared:   isShared,
 	}
 
 	if err := hooks.Flush(newStderrLogger(), cfg); err != nil {

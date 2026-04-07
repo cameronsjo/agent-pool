@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -15,27 +16,48 @@ import (
 	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
+// resolveExpertDirForMCP returns the state directory for the expert.
+// Shared experts resolve to the user-level dir; pool-scoped experts use the pool dir.
+func resolveExpertDirForMCP(cfg *ServerConfig) (string, error) {
+	if cfg.IsShared {
+		dir, err := mail.ResolveSharedExpertDir(cfg.ExpertName)
+		if err != nil {
+			return "", fmt.Errorf("resolving shared expert dir for %q: %w", cfg.ExpertName, err)
+		}
+		return dir, nil
+	}
+	return mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName), nil
+}
+
 // RegisterExpertTools adds all expert-scope tools to the MCP server.
 func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	if cfg == nil {
 		return
 	}
-	expertDir := mail.ResolveExpertDir(cfg.PoolDir, cfg.ExpertName)
+	expertDir, err := resolveExpertDirForMCP(cfg)
+	if err != nil {
+		cfg.Logger.Error("Failed to resolve expert directory, tools will not function correctly",
+			"expert", cfg.ExpertName,
+			"error", err,
+		)
+		return
+	}
 
 	srv.AddTool(
 		mcp.NewTool("read_state",
-			mcp.WithDescription("Read current expert state files (identity.md, state.md, errors.md)"),
+			mcp.WithDescription("Read current expert state files (identity.md, state.md, errors.md). For shared experts, also returns project_state."),
 			mcp.WithToolAnnotation(mcp.ToolAnnotation{ReadOnlyHint: boolPtr(true)}),
 		),
-		handleReadState(expertDir),
+		handleReadState(expertDir, cfg),
 	)
 
 	srv.AddTool(
 		mcp.NewTool("update_state",
-			mcp.WithDescription("Update the expert's working memory (state.md). Content must be non-empty and under 50KB."),
+			mcp.WithDescription("Update the expert's working memory (state.md). Content must be non-empty and under 50KB. For shared experts, use scope to target user-level or project-level state."),
 			mcp.WithString("content", mcp.Required(), mcp.Description("New state.md content")),
+			mcp.WithString("scope", mcp.Description("For shared experts: 'project' (default) or 'user'. Ignored for pool-scoped experts.")),
 		),
-		handleUpdateState(expertDir),
+		handleUpdateState(expertDir, cfg),
 	)
 
 	srv.AddTool(
@@ -75,7 +97,7 @@ func RegisterExpertTools(srv *server.MCPServer, cfg *ServerConfig) {
 	)
 }
 
-func handleReadState(expertDir string) server.ToolHandlerFunc {
+func handleReadState(expertDir string, cfg *ServerConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		identity, state, errors, err := expert.ReadState(expertDir)
 		if err != nil {
@@ -88,6 +110,14 @@ func handleReadState(expertDir string) server.ToolHandlerFunc {
 			"errors":   errors,
 		}
 
+		// For shared experts, also read project-level overlay state
+		if cfg.IsShared && cfg.SharedOverlayDir != "" {
+			overlayState := readOverlayState(cfg.SharedOverlayDir)
+			if overlayState != "" {
+				result["project_state"] = overlayState
+			}
+		}
+
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("marshaling result: %v", err)), nil
@@ -97,18 +127,50 @@ func handleReadState(expertDir string) server.ToolHandlerFunc {
 	}
 }
 
-func handleUpdateState(expertDir string) server.ToolHandlerFunc {
+// readOverlayState reads state.md from the overlay directory. Returns empty
+// string if the file doesn't exist.
+func readOverlayState(overlayDir string) string {
+	data, err := os.ReadFile(filepath.Join(overlayDir, "state.md"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func handleUpdateState(expertDir string, cfg *ServerConfig) server.ToolHandlerFunc {
 	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		content := request.GetString("content", "")
 		if content == "" {
 			return mcp.NewToolResultError("content parameter is required"), nil
 		}
 
-		if err := expert.WriteState(expertDir, content); err != nil {
-			return mcp.NewToolResultError(fmt.Sprintf("writing state: %v", err)), nil
+		if !cfg.IsShared {
+			// Pool-scoped expert: ignore scope, write to expertDir
+			if err := expert.WriteState(expertDir, content); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("writing state: %v", err)), nil
+			}
+			return mcp.NewToolResultText("state.md updated"), nil
 		}
 
-		return mcp.NewToolResultText("state.md updated"), nil
+		// Shared expert: route by scope
+		scope := request.GetString("scope", "project")
+		switch scope {
+		case "user":
+			if err := expert.WriteState(expertDir, content); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("writing state: %v", err)), nil
+			}
+			return mcp.NewToolResultText("user-level state.md updated"), nil
+		case "project":
+			if cfg.SharedOverlayDir == "" {
+				return mcp.NewToolResultError("shared expert has no project overlay directory configured"), nil
+			}
+			if err := expert.WriteState(cfg.SharedOverlayDir, content); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("writing state: %v", err)), nil
+			}
+			return mcp.NewToolResultText("project-level state.md updated"), nil
+		default:
+			return mcp.NewToolResultError(fmt.Sprintf("invalid scope %q: use 'user' or 'project'", scope)), nil
+		}
 	}
 }
 

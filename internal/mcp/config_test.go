@@ -5,6 +5,9 @@
 //   - JSON matches expected MCP config schema
 //   - File path is returned and file exists
 //   - Caller can remove the file
+//
+// WriteTempConfigShared:
+//   - Creates valid JSON with --shared true in args
 
 package mcp_test
 
@@ -77,5 +80,34 @@ func TestWriteTempConfig_FileCleanup(t *testing.T) {
 	// File should be gone
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Error("temp file still exists after removal")
+	}
+}
+
+func TestWriteTempConfigShared_IncludesSharedFlag(t *testing.T) {
+	path, err := agentmcp.WriteTempConfigShared("/tmp/test-pool", "security-standards")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer os.Remove(path)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading temp file: %v", err)
+	}
+
+	var cfg agentmcp.MCPConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	entry := cfg.MCPServers["agent-pool"]
+	expectedArgs := []string{"mcp", "--pool", "/tmp/test-pool", "--expert", "security-standards", "--shared", "true"}
+	if len(entry.Args) != len(expectedArgs) {
+		t.Fatalf("Args = %v, want %v", entry.Args, expectedArgs)
+	}
+	for i, want := range expectedArgs {
+		if entry.Args[i] != want {
+			t.Errorf("Args[%d] = %q, want %q", i, entry.Args[i], want)
+		}
 	}
 }

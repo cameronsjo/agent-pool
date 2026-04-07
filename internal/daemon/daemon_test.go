@@ -251,6 +251,133 @@ Test routing.
 	}
 }
 
+func TestDaemon_EnsureDirsCreatesSharedStateDirs(t *testing.T) {
+	poolDir := t.TempDir()
+
+	cfg := writePoolConfig(t, poolDir, `[pool]
+name = "shared-test"
+project_dir = "PROJECT_DIR"
+
+[shared]
+include = ["security-standards", "corporate-policies"]
+
+[experts.auth]
+model = "sonnet"
+`)
+
+	cancel, errCh := startTestDaemon(t, cfg, poolDir, &fakeSpawner{})
+	defer func() {
+		cancel()
+		<-errCh
+	}()
+
+	// Verify shared-state directories were created
+	for _, name := range []string{"security-standards", "corporate-policies"} {
+		for _, sub := range []string{"inbox", "logs"} {
+			dir := filepath.Join(poolDir, "shared-state", name, sub)
+			if _, err := os.Stat(dir); os.IsNotExist(err) {
+				t.Errorf("expected shared-state directory %s to exist", dir)
+			}
+		}
+	}
+
+	// Verify pool-scoped expert dirs still created
+	for _, sub := range []string{"inbox", "logs"} {
+		dir := filepath.Join(poolDir, "experts", "auth", sub)
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			t.Errorf("expected pool-scoped expert directory %s to exist", dir)
+		}
+	}
+}
+
+func TestDaemon_SharedExpertSpawnConfig(t *testing.T) {
+	// Set HOME to a temp dir so SharedExpertDir resolves to a controlled location
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	// Create the user-level shared expert directory
+	sharedExpertDir := filepath.Join(fakeHome, ".agent-pool", "experts", "security-standards")
+	if err := os.MkdirAll(sharedExpertDir, 0o755); err != nil {
+		t.Fatalf("creating shared expert dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sharedExpertDir, "identity.md"), []byte("I am the security expert."), 0o644); err != nil {
+		t.Fatalf("writing identity.md: %v", err)
+	}
+
+	poolDir := t.TempDir()
+	cfg := writePoolConfig(t, poolDir, `[pool]
+name = "shared-spawn-test"
+project_dir = "PROJECT_DIR"
+
+[shared]
+include = ["security-standards"]
+
+[experts.auth]
+model = "sonnet"
+`)
+
+	fake := &fakeSpawner{}
+	cancel, errCh := startTestDaemon(t, cfg, poolDir, fake)
+
+	// Send a task to the shared expert
+	postoffice := filepath.Join(poolDir, "postoffice")
+	writeMessage(t, postoffice, "task-shared-001", "architect", "security-standards")
+
+	// Wait for the log file to appear in the pool-scoped shared-state dir
+	logPath := filepath.Join(poolDir, "shared-state", "security-standards", "logs", "task-shared-001.json")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(logPath); err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("daemon returned error: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("daemon did not shut down in time")
+	}
+
+	// Verify spawn was called
+	calls := fake.getCalls()
+	if len(calls) == 0 {
+		t.Fatal("expected at least one spawn call for shared expert")
+	}
+
+	// Find the shared expert spawn call
+	var sharedCall *expert.SpawnConfig
+	for _, c := range calls {
+		if c.Name == "security-standards" {
+			sharedCall = c
+			break
+		}
+	}
+	if sharedCall == nil {
+		t.Fatal("no spawn call for security-standards")
+	}
+
+	// ExpertDir should point to user-level dir
+	if sharedCall.ExpertDir != sharedExpertDir {
+		t.Errorf("ExpertDir = %q, want %q", sharedCall.ExpertDir, sharedExpertDir)
+	}
+
+	// OverlayDir should point to pool-scoped shared-state
+	wantOverlay := filepath.Join(poolDir, "shared-state", "security-standards")
+	if sharedCall.OverlayDir != wantOverlay {
+		t.Errorf("OverlayDir = %q, want %q", sharedCall.OverlayDir, wantOverlay)
+	}
+
+	// Logs should be in pool-scoped shared-state dir, not user-level
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		t.Error("logs should be written to shared-state/{name}/logs/")
+	}
+}
+
 // writeMessage writes a YAML-frontmatter mail file to the given directory.
 func writeMessage(t *testing.T, dir, id, from, to string) string {
 	t.Helper()

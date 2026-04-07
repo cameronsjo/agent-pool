@@ -65,7 +65,7 @@ Do the thing.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	msg, err := mail.Route(logger, poolDir, srcPath)
+	msg, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err != nil {
 		t.Fatalf("Route failed: %v", err)
 	}
@@ -105,7 +105,7 @@ This should fail.
 	os.WriteFile(srcPath, []byte(msgContent), 0o644)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown recipient")
 	}
@@ -146,7 +146,7 @@ Idempotent delivery test.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err != nil {
 		t.Fatalf("Route failed on idempotent delivery: %v", err)
 	}
@@ -195,7 +195,7 @@ This should fail and preserve the original.
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when inbox directory does not exist")
 	}
@@ -245,7 +245,7 @@ Unreadable source test.
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when source file is unreadable")
 	}
@@ -290,7 +290,7 @@ Read-only inbox test.
 	})
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error when inbox directory is read-only")
 	}
@@ -315,7 +315,7 @@ func TestRoute_ParseError(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	_, err := mail.Route(logger, poolDir, srcPath)
+	_, err := mail.Route(logger, poolDir, srcPath, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid message content")
 	}
@@ -351,6 +351,54 @@ func TestIsBuiltinRole(t *testing.T) {
 	}
 }
 
+func TestResolveSharedExpertDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home directory: %v", err)
+	}
+
+	t.Run("happy path", func(t *testing.T) {
+		dir, err := mail.ResolveSharedExpertDir("security-standards")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := filepath.Join(home, ".agent-pool", "experts", "security-standards")
+		if dir != expected {
+			t.Errorf("got %q, want %q", dir, expected)
+		}
+	})
+
+	t.Run("rejects empty name", func(t *testing.T) {
+		_, err := mail.ResolveSharedExpertDir("")
+		if err == nil {
+			t.Fatal("expected error for empty name")
+		}
+	})
+
+	t.Run("rejects path traversal", func(t *testing.T) {
+		_, err := mail.ResolveSharedExpertDir("../evil")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+	})
+}
+
+func TestResolveSharedInbox(t *testing.T) {
+	got := mail.ResolveSharedInbox("/pool", "security-standards")
+	want := "/pool/shared-state/security-standards/inbox"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveSharedLogDir(t *testing.T) {
+	got := mail.ResolveSharedLogDir("/pool", "security-standards")
+	want := "/pool/shared-state/security-standards/logs"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 // Test Plan for router.go
 //
 // IsBuiltinRole (Classification: PURE LOGIC)
@@ -362,6 +410,18 @@ func TestIsBuiltinRole(t *testing.T) {
 //   [x] Happy: builtin roles resolve correctly (TestResolveInbox_BuiltinRoles)
 //   [x] Happy: experts resolve correctly (TestResolveInbox_Experts)
 //   [x] Boundary: empty recipient (TestResolveInbox_EmptyRecipient)
+//
+//
+// ResolveSharedExpertDir (Classification: PATH RESOLVER)
+//   [x] Happy: returns ~/.agent-pool/experts/{name}/ (TestResolveSharedExpertDir)
+//   [x] Unhappy: rejects empty name (TestResolveSharedExpertDir)
+//   [x] Unhappy: rejects path traversal (TestResolveSharedExpertDir)
+//
+// ResolveSharedInbox (Classification: PURE LOGIC)
+//   [x] Happy: returns {poolDir}/shared-state/{name}/inbox (TestResolveSharedInbox)
+//
+// ResolveSharedLogDir (Classification: PURE LOGIC)
+//   [x] Happy: returns {poolDir}/shared-state/{name}/logs (TestResolveSharedLogDir)
 //
 // Route (Classification: I/O BOUNDARY)
 //   [x] Happy: end-to-end routing (TestRoute_EndToEnd)

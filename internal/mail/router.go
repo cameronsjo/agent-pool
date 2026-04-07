@@ -6,25 +6,20 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-)
 
-// builtinRoles are roles with top-level directories (not under experts/).
-var builtinRoles = map[string]bool{
-	"architect":  true,
-	"researcher": true,
-	"concierge":  true,
-}
+	"github.com/cameronsjo/agent-pool/internal/config"
+)
 
 // IsBuiltinRole reports whether the given name is a built-in role (architect,
 // researcher, concierge) rather than a pool-scoped expert.
 func IsBuiltinRole(name string) bool {
-	return builtinRoles[name]
+	return config.BuiltinRoleNames[name]
 }
 
 // ResolveExpertDir returns the state directory for an expert or built-in role.
 // Built-in roles use {poolDir}/{role}/, experts use {poolDir}/experts/{name}/.
 func ResolveExpertDir(poolDir, name string) string {
-	if builtinRoles[name] {
+	if config.BuiltinRoleNames[name] {
 		return filepath.Join(poolDir, name)
 	}
 	return filepath.Join(poolDir, "experts", name)
@@ -40,22 +35,49 @@ func ResolveExpertDir(poolDir, name string) string {
 //
 //	{poolDir}/experts/{name}/inbox/
 func ResolveInbox(poolDir, recipient string) string {
-	if builtinRoles[recipient] {
+	if config.BuiltinRoleNames[recipient] {
 		return filepath.Join(poolDir, recipient, "inbox")
 	}
 	return filepath.Join(poolDir, "experts", recipient, "inbox")
 }
 
+// ResolveSharedExpertDir returns the user-level state directory for a shared
+// expert: ~/.agent-pool/experts/{name}/. Delegates validation to config.SharedExpertDir.
+func ResolveSharedExpertDir(name string) (string, error) {
+	return config.SharedExpertDir(name)
+}
+
+// ResolveSharedInbox returns the pool-scoped inbox for a shared expert:
+// {poolDir}/shared-state/{name}/inbox/.
+func ResolveSharedInbox(poolDir, name string) string {
+	return filepath.Join(poolDir, "shared-state", name, "inbox")
+}
+
+// ResolveSharedLogDir returns the pool-scoped log directory for a shared expert:
+// {poolDir}/shared-state/{name}/logs/.
+func ResolveSharedLogDir(poolDir, name string) string {
+	return filepath.Join(poolDir, "shared-state", name, "logs")
+}
+
 // Route parses a message from the postoffice, copies it to the recipient's
 // inbox, and deletes the original. Delivery is at-least-once: the copy
 // completes before the delete.
-func Route(logger *slog.Logger, poolDir, filePath string) (*Message, error) {
+//
+// sharedNames lists experts that are shared (user-level). Messages to shared
+// experts are routed to the pool-scoped shared-state inbox. Pass nil when
+// no shared experts are configured.
+func Route(logger *slog.Logger, poolDir, filePath string, sharedNames map[string]bool) (*Message, error) {
 	msg, err := ParseFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("parsing message for routing: %w", err)
 	}
 
-	inboxDir := ResolveInbox(poolDir, msg.To)
+	var inboxDir string
+	if sharedNames[msg.To] {
+		inboxDir = ResolveSharedInbox(poolDir, msg.To)
+	} else {
+		inboxDir = ResolveInbox(poolDir, msg.To)
+	}
 
 	if _, err := os.Stat(inboxDir); err != nil {
 		return nil, fmt.Errorf("inbox not available for recipient %q: %w", msg.To, err)

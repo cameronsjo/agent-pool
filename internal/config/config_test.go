@@ -14,6 +14,20 @@
 //   [x] Happy: valid duration "10m" (TestDefaultsSection_ParseSessionTimeout)
 //   [x] Happy: valid duration "30s" (TestDefaultsSection_ParseSessionTimeout)
 //   [x] Unhappy: invalid duration string (TestDefaultsSection_ParseSessionTimeout)
+//
+// SharedExpertDir (Classification: PATH RESOLVER)
+//   [x] Happy: returns ~/.agent-pool/experts/{name}/
+//   [x] Unhappy: empty name
+//   [x] Unhappy: path traversal (../)
+//   [x] Unhappy: dot name (.)
+//   [x] Unhappy: path separator in name
+//
+// PoolConfig.Validate (Classification: VALIDATION)
+//   [x] Happy: valid config with shared.include (TestValidate_HappyPath)
+//   [x] Happy: empty shared.include passes (TestValidate_EmptySharedInclude)
+//   [x] Unhappy: shared conflicts with builtin role (TestValidate_SharedConflictsWithBuiltin)
+//   [x] Unhappy: shared conflicts with pool-scoped expert (TestValidate_SharedConflictsWithPoolExpert)
+//   [x] Unhappy: shared name has path separator (TestValidate_SharedPathTraversal)
 
 package config_test
 
@@ -338,6 +352,108 @@ func assertSliceEqual(t *testing.T, field string, expected []string, actual []st
 		if expected[i] != actual[i] {
 			t.Errorf("%s[%d]: expected %q, got %q", field, i, expected[i], actual[i])
 		}
+	}
+}
+
+func TestSharedExpertDir(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("cannot determine home directory: %v", err)
+	}
+
+	t.Run("happy path", func(t *testing.T) {
+		dir, err := config.SharedExpertDir("security-standards")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		expected := filepath.Join(home, ".agent-pool", "experts", "security-standards")
+		if dir != expected {
+			t.Errorf("got %q, want %q", dir, expected)
+		}
+	})
+
+	t.Run("empty name", func(t *testing.T) {
+		_, err := config.SharedExpertDir("")
+		if err == nil {
+			t.Fatal("expected error for empty name")
+		}
+	})
+
+	t.Run("path traversal", func(t *testing.T) {
+		_, err := config.SharedExpertDir("../evil")
+		if err == nil {
+			t.Fatal("expected error for path traversal")
+		}
+	})
+
+	t.Run("dot name", func(t *testing.T) {
+		_, err := config.SharedExpertDir(".")
+		if err == nil {
+			t.Fatal("expected error for dot name")
+		}
+	})
+
+	t.Run("path separator", func(t *testing.T) {
+		_, err := config.SharedExpertDir("foo/bar")
+		if err == nil {
+			t.Fatal("expected error for path separator")
+		}
+	})
+}
+
+func TestValidate_HappyPath(t *testing.T) {
+	cfg := &config.PoolConfig{
+		Shared: config.SharedSection{Include: []string{"security-standards", "corporate-policies"}},
+		Experts: map[string]config.ExpertSection{
+			"auth": {Model: "sonnet"},
+		},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidate_EmptySharedInclude(t *testing.T) {
+	cfg := &config.PoolConfig{}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected error for empty shared.include: %v", err)
+	}
+}
+
+func TestValidate_SharedConflictsWithBuiltin(t *testing.T) {
+	cfg := &config.PoolConfig{
+		Shared: config.SharedSection{Include: []string{"architect"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for shared name conflicting with builtin role")
+	}
+	if !strings.Contains(err.Error(), "architect") {
+		t.Errorf("error should mention 'architect', got: %v", err)
+	}
+}
+
+func TestValidate_SharedConflictsWithPoolExpert(t *testing.T) {
+	cfg := &config.PoolConfig{
+		Shared:  config.SharedSection{Include: []string{"auth"}},
+		Experts: map[string]config.ExpertSection{"auth": {Model: "sonnet"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for shared name conflicting with pool-scoped expert")
+	}
+	if !strings.Contains(err.Error(), "auth") {
+		t.Errorf("error should mention 'auth', got: %v", err)
+	}
+}
+
+func TestValidate_SharedPathTraversal(t *testing.T) {
+	cfg := &config.PoolConfig{
+		Shared: config.SharedSection{Include: []string{"../evil"}},
+	}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for path traversal in shared name")
 	}
 }
 
