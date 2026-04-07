@@ -60,4 +60,6 @@ jobs:
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-        run: go build -ldflags="-s -w" -o bin/agent-pool-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/agent-pool
+        run: |
+          mkdir -p bin
+          go build -ldflags="-s -w" -o bin/agent-pool-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/agent-pool

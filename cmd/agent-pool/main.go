@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -68,6 +69,7 @@ func cmdInit() {
 	if len(os.Args) > 2 {
 		poolDir = os.Args[2]
 	}
+	poolDir = expandTilde(poolDir)
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -246,6 +248,8 @@ func initPool(poolDir, poolName, projectDir string) error {
 	tomlPath := filepath.Join(poolDir, "pool.toml")
 	if _, err := os.Stat(tomlPath); err == nil {
 		return fmt.Errorf("%s already exists", tomlPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking %s: %w", tomlPath, err)
 	}
 
 	dirs := []string{
@@ -768,6 +772,21 @@ func newStderrLogger() *slog.Logger {
 	return slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
+}
+
+// expandTilde replaces a leading ~ with the user's home directory.
+func expandTilde(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		if path == "~" {
+			return home
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 // parseFlags extracts named --flag value pairs from os.Args[start:].

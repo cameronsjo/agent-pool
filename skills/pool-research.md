@@ -41,5 +41,5 @@ Present a health summary:
   pass. Tasks completed since last curation will inform the update."
 - **For knowledge gaps**: "Dispatch a research question to seed this
   area, then the researcher will consolidate the findings."
-- **For quality concerns**: "Check the expert's recent task logs to see
-  if outputs match expectations."
+- **For quality concerns**: "Use `check_status` to review recent task
+  outcomes, then `dispatch` focused validation tasks to the expert."
