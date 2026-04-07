@@ -1311,8 +1311,10 @@ func (d *Daemon) ensureDirs() error {
 
 // reloadConfig re-reads pool.toml, validates, and swaps the config under lock.
 // On parse/validation failure, the old config is kept and a warning is logged.
-// Returns the new config if reload succeeded, nil otherwise. The watcher
-// parameter is used to add/remove inbox watches for changed experts.
+// The watcher parameter is used to add inbox watches for new experts.
+//
+// The entire reload (config swap, dir creation, watcher setup) runs under d.mu
+// to prevent concurrent goroutines from seeing partially applied state.
 func (d *Daemon) reloadConfig(watcher *Watcher) {
 	newCfg, err := config.LoadPool(d.poolDir)
 	if err != nil {
@@ -1331,36 +1333,33 @@ func (d *Daemon) reloadConfig(watcher *Watcher) {
 	for _, name := range newCfg.Shared.Include {
 		d.sharedSet[name] = true
 	}
-	d.mu.Unlock()
 
 	// Diff experts: find added and removed
 	oldExperts := make(map[string]bool, len(oldCfg.Experts))
 	for name := range oldCfg.Experts {
 		oldExperts[name] = true
 	}
-	newExperts := make(map[string]bool, len(newCfg.Experts))
-	for name := range newCfg.Experts {
-		newExperts[name] = true
-	}
 
 	var added, removed []string
-	for name := range newExperts {
+	for name := range newCfg.Experts {
 		if !oldExperts[name] {
 			added = append(added, name)
 		}
 	}
 	for name := range oldExperts {
-		if !newExperts[name] {
+		if _, ok := newCfg.Experts[name]; !ok {
 			removed = append(removed, name)
 		}
 	}
 
-	// Create dirs and watch new expert inboxes
+	// Create dirs and watch new expert inboxes (under lock to prevent races)
+	var setupFailed bool
 	if len(added) > 0 {
 		if err := d.ensureDirs(); err != nil {
 			d.logger.Error("Failed to create directories for new experts",
 				"error", err,
 			)
+			setupFailed = true
 		}
 		for _, name := range added {
 			inboxDir := mail.ResolveInbox(d.poolDir, name)
@@ -1369,15 +1368,26 @@ func (d *Daemon) reloadConfig(watcher *Watcher) {
 					"expert", name,
 					"error", err,
 				)
+				setupFailed = true
 			}
 		}
 	}
+
+	d.mu.Unlock()
 
 	// Log removed experts (don't delete dirs — data preservation)
 	for _, name := range removed {
 		d.logger.Info("Expert removed from config (inbox preserved)",
 			"expert", name,
 		)
+	}
+
+	if setupFailed {
+		d.logger.Warn("Config reloaded with partial setup failures",
+			"experts_added", added,
+			"experts_removed", removed,
+		)
+		return
 	}
 
 	d.logger.Info("Successfully reloaded config",

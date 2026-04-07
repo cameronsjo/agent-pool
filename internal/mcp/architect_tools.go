@@ -307,6 +307,10 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 		if formulaName == "" {
 			return mcp.NewToolResultError("formula parameter is required"), nil
 		}
+		// Guard against path traversal on formula name
+		if formulaName != filepath.Base(formulaName) || formulaName == "." || formulaName == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid formula name %q: must be a simple filename", formulaName)), nil
+		}
 		if prefix == "" {
 			return mcp.NewToolResultError("prefix parameter is required"), nil
 		}
@@ -329,7 +333,7 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 			}
 		}
 
-		// Parse optional expert assignments
+		// Parse optional expert assignments (only applied to role="experts" steps)
 		experts := make(map[string]string)
 		if expertsStr != "" {
 			if err := json.Unmarshal([]byte(expertsStr), &experts); err != nil {
@@ -347,18 +351,19 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 			}
 		}
 
-		// Build and post messages for each step
+		// Phase 1: Compose all messages up front (preflight before any writes)
 		var taskIDs []string
+		var messages []*mail.Message
 		now := time.Now().UTC()
 
 		for _, step := range f.Steps {
 			taskID := prefix + "-" + step.ID
 			taskIDs = append(taskIDs, taskID)
 
-			// Resolve recipient
+			// Resolve recipient: experts map only applies to role="experts" steps
 			to := step.Role
-			if expertName, ok := experts[step.ID]; ok {
-				to = expertName
+			if step.Role == "experts" {
+				to = experts[step.ID] // guaranteed present by validation above
 			}
 
 			// Resolve body
@@ -373,7 +378,7 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 				deps = append(deps, prefix+"-"+dep)
 			}
 
-			msg := &mail.Message{
+			messages = append(messages, &mail.Message{
 				ID:        taskID,
 				From:      "architect",
 				To:        to,
@@ -382,11 +387,32 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 				DependsOn: deps,
 				Timestamp: now,
 				Body:      body,
-			}
+			})
+		}
 
-			if err := postMessage(cfg.PoolDir, msg); err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("posting task %s: %v", taskID, err)), nil
+		// Approval gate: block on human approval if required
+		if shouldRequireApproval(cfg.ApprovalMode) {
+			gate := approval.DefaultGate(cfg.PoolDir)
+			gate.Logger = cfg.Logger
+			summary := fmt.Sprintf("Formula: %s\nPrefix: %s\nTasks: %s",
+				formulaName, prefix, strings.Join(taskIDs, ", "))
+			if gateErr := gate.Request(ctx, prefix, summary); gateErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("approval gate: %v", gateErr)), nil
 			}
+		}
+
+		// Phase 2: Post all messages (all-or-nothing best effort)
+		var posted []string
+		for _, msg := range messages {
+			if err := postMessage(cfg.PoolDir, msg); err != nil {
+				// Clean up already-posted files on failure
+				postofficeDir := filepath.Join(cfg.PoolDir, "postoffice")
+				for _, id := range posted {
+					os.Remove(filepath.Join(postofficeDir, id+".md"))
+				}
+				return mcp.NewToolResultError(fmt.Sprintf("posting task %s: %v (rolled back %d previously posted)", msg.ID, err, len(posted))), nil
+			}
+			posted = append(posted, msg.ID)
 		}
 
 		return mcp.NewToolResultText(fmt.Sprintf(

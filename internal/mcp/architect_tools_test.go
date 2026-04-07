@@ -351,18 +351,6 @@ func TestAmendContract_NotFound(t *testing.T) {
 
 // --- instantiate_formula tests ---
 
-// writeFormula writes a TOML formula file into the pool's formulas/ directory.
-func writeFormula(t *testing.T, poolDir, name, content string) {
-	t.Helper()
-	dir := filepath.Join(poolDir, "formulas")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("creating formulas dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(content), 0o644); err != nil {
-		t.Fatalf("writing formula: %v", err)
-	}
-}
-
 func TestInstantiateFormula_Happy(t *testing.T) {
 	poolDir := setupArchitectPool(t)
 	srv := buildArchitectTestServer(t, poolDir)

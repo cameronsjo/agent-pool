@@ -7,6 +7,7 @@
 //   callToolWithContext — invoke a tool via JSON-RPC (custom context)
 //   resultText         — extract text content from tool result
 //   listToolNames      — list registered tool names
+//   writeFormula       — write a TOML formula to pool's formulas/ directory
 //   mustJSON           — marshal to JSON or fail
 
 package mcp_test
@@ -240,6 +241,18 @@ func buildSharedMCPTestServer(t *testing.T, poolDir, expertName, overlayDir stri
 		t.Fatalf("MCP init failed: %d %s", initResp.Error.Code, initResp.Error.Message)
 	}
 	return srv
+}
+
+// writeFormula writes a TOML formula file into the pool's formulas/ directory.
+func writeFormula(t *testing.T, poolDir, name, content string) {
+	t.Helper()
+	dir := filepath.Join(poolDir, "formulas")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating formulas dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".toml"), []byte(content), 0o644); err != nil {
+		t.Fatalf("writing formula: %v", err)
+	}
 }
 
 // mustJSON marshals v to JSON or fails the test.

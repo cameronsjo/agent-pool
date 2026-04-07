@@ -120,8 +120,10 @@ func (w *Watcher) Run(ctx context.Context) {
 				continue
 			}
 
-			// Config events: Write on .toml files
-			if event.Has(fsnotify.Write) && strings.HasSuffix(base, ".toml") {
+			// Config events: Write or Create on .toml files.
+			// Write catches in-place edits. Create catches atomic
+			// temp-file + rename updates (which emit Create, not Write).
+			if (event.Has(fsnotify.Write) || event.Has(fsnotify.Create)) && strings.HasSuffix(base, ".toml") {
 				if err := waitForStable(path); err != nil {
 					w.logger.Warn("Skipping config file. Reason: not stable after polling",
 						"path", path,

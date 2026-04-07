@@ -16,8 +16,10 @@
 // Validate:
 //   - [x] Happy path — linear chain
 //   - [x] Happy path — diamond DAG
+//   - [x] Nil formula
 //   - [x] Empty steps
 //   - [x] Empty step ID
+//   - [x] Unsafe step ID (path separator)
 //   - [x] Empty step role
 //   - [x] Empty step title
 //   - [x] Duplicate step IDs
@@ -186,6 +188,21 @@ func TestValidate_DiamondDAG(t *testing.T) {
 	}
 	if err := Validate(f); err != nil {
 		t.Fatalf("Validate() error: %v", err)
+	}
+}
+
+func TestValidate_NilFormula(t *testing.T) {
+	err := Validate(nil)
+	if err == nil || !strings.Contains(err.Error(), "nil") {
+		t.Fatalf("expected 'nil' error, got: %v", err)
+	}
+}
+
+func TestValidate_UnsafeStepID(t *testing.T) {
+	f := &Formula{Steps: []Step{{ID: "foo/bar", Role: "x", Title: "y"}}}
+	err := Validate(f)
+	if err == nil || !strings.Contains(err.Error(), "filename-safe") {
+		t.Fatalf("expected 'filename-safe' error, got: %v", err)
 	}
 }
 

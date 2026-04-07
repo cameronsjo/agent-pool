@@ -83,6 +83,9 @@ func LoadAll(dir string) (map[string]*Formula, error) {
 //   - All depends_on refs point to valid step IDs
 //   - No cycles in the dependency graph
 func Validate(f *Formula) error {
+	if f == nil {
+		return fmt.Errorf("formula is nil")
+	}
 	if len(f.Steps) == 0 {
 		return fmt.Errorf("formula has no steps")
 	}
@@ -91,6 +94,9 @@ func Validate(f *Formula) error {
 	for _, s := range f.Steps {
 		if s.ID == "" {
 			return fmt.Errorf("step has empty id")
+		}
+		if s.ID != filepath.Base(s.ID) || s.ID == "." || s.ID == ".." {
+			return fmt.Errorf("step id %q is not filename-safe", s.ID)
 		}
 		if s.Role == "" {
 			return fmt.Errorf("step %q has empty role", s.ID)
