@@ -1258,6 +1258,7 @@ func (d *Daemon) ensureDirs() error {
 		filepath.Join(d.poolDir, "postoffice"),
 		filepath.Join(d.poolDir, "contracts"),
 		filepath.Join(d.poolDir, "approvals"),
+		filepath.Join(d.poolDir, "formulas"),
 		// Built-in roles get top-level inbox + logs directories
 		filepath.Join(d.poolDir, "architect", "inbox"),
 		filepath.Join(d.poolDir, "architect", "logs"),
