@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/cameronsjo/agent-pool/internal/approval"
 	"github.com/cameronsjo/agent-pool/internal/contract"
+	"github.com/cameronsjo/agent-pool/internal/formula"
 	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
@@ -67,6 +69,17 @@ func RegisterArchitectTools(srv *server.MCPServer, cfg *ServerConfig) {
 			mcp.WithString("body", mcp.Required(), mcp.Description("New contract body (markdown)")),
 		),
 		handleAmendContract(cfg, store),
+	)
+
+	srv.AddTool(
+		mcp.NewTool("instantiate_formula",
+			mcp.WithDescription("Instantiate a workflow formula, bulk-creating tasks with dependency edges. Posts all tasks to the postoffice."),
+			mcp.WithString("formula", mcp.Required(), mcp.Description("Formula name (filename without .toml from formulas/ directory)")),
+			mcp.WithString("prefix", mcp.Required(), mcp.Description("ID prefix for generated tasks (e.g., 'feat-auth' produces 'feat-auth-gather')")),
+			mcp.WithString("overrides", mcp.Description("JSON object mapping step ID to custom body text (optional)")),
+			mcp.WithString("experts", mcp.Description("JSON object mapping step ID to specific expert name (required for steps with role='experts')")),
+		),
+		handleInstantiateFormula(cfg),
 	)
 }
 
@@ -281,6 +294,134 @@ func handleAmendContract(cfg *ServerConfig, store *contract.Store) server.ToolHa
 
 		return mcp.NewToolResultText(fmt.Sprintf("contract %s amended to v%d, notified: %s",
 			id, amended.Version, strings.Join(amended.Between, ", "))), nil
+	}
+}
+
+func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
+	return func(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		formulaName := request.GetString("formula", "")
+		prefix := request.GetString("prefix", "")
+		overridesStr := request.GetString("overrides", "")
+		expertsStr := request.GetString("experts", "")
+
+		if formulaName == "" {
+			return mcp.NewToolResultError("formula parameter is required"), nil
+		}
+		// Guard against path traversal on formula name
+		if formulaName != filepath.Base(formulaName) || formulaName == "." || formulaName == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid formula name %q: must be a simple filename", formulaName)), nil
+		}
+		if prefix == "" {
+			return mcp.NewToolResultError("prefix parameter is required"), nil
+		}
+		if prefix != filepath.Base(prefix) || prefix == "." || prefix == ".." {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid prefix %q: must be a simple filename-safe string", prefix)), nil
+		}
+
+		// Load formula
+		formulaPath := filepath.Join(cfg.PoolDir, "formulas", formulaName+".toml")
+		f, err := formula.Load(formulaPath)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("loading formula: %v", err)), nil
+		}
+
+		// Parse optional overrides
+		overrides := make(map[string]string)
+		if overridesStr != "" {
+			if err := json.Unmarshal([]byte(overridesStr), &overrides); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("parsing overrides JSON: %v", err)), nil
+			}
+		}
+
+		// Parse optional expert assignments (only applied to role="experts" steps)
+		experts := make(map[string]string)
+		if expertsStr != "" {
+			if err := json.Unmarshal([]byte(expertsStr), &experts); err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("parsing experts JSON: %v", err)), nil
+			}
+		}
+
+		// Validate: steps with role="experts" must have an expert assignment
+		for _, step := range f.Steps {
+			if step.Role == "experts" {
+				if _, ok := experts[step.ID]; !ok {
+					return mcp.NewToolResultError(fmt.Sprintf(
+						"step %q has role 'experts' but no expert assigned in experts map", step.ID)), nil
+				}
+			}
+		}
+
+		// Phase 1: Compose all messages up front (preflight before any writes)
+		var taskIDs []string
+		var messages []*mail.Message
+		now := time.Now().UTC()
+
+		for _, step := range f.Steps {
+			taskID := prefix + "-" + step.ID
+			taskIDs = append(taskIDs, taskID)
+
+			// Resolve recipient: experts map only applies to role="experts" steps
+			to := step.Role
+			if step.Role == "experts" {
+				to = experts[step.ID] // guaranteed present by validation above
+			}
+
+			// Resolve body
+			body := fmt.Sprintf("# %s\n\n%s", step.Title, step.Description)
+			if override, ok := overrides[step.ID]; ok {
+				body = fmt.Sprintf("# %s\n\n%s", step.Title, override)
+			}
+
+			// Apply prefix to dependency IDs
+			var deps []string
+			for _, dep := range step.DependsOn {
+				deps = append(deps, prefix+"-"+dep)
+			}
+
+			messages = append(messages, &mail.Message{
+				ID:        taskID,
+				From:      "architect",
+				To:        to,
+				Type:      mail.TypeTask,
+				Priority:  mail.PriorityNormal,
+				DependsOn: deps,
+				Timestamp: now,
+				Body:      body,
+			})
+		}
+
+		// Approval gate: block on human approval if required
+		if shouldRequireApproval(cfg.ApprovalMode) {
+			gate := approval.DefaultGate(cfg.PoolDir)
+			gate.Logger = cfg.Logger
+			summary := fmt.Sprintf("Formula: %s\nPrefix: %s\nTasks: %s",
+				formulaName, prefix, strings.Join(taskIDs, ", "))
+			if gateErr := gate.Request(ctx, prefix, summary); gateErr != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("approval gate: %v", gateErr)), nil
+			}
+		}
+
+		// Phase 2: Post all messages. Best-effort cleanup on failure:
+		// the daemon routes postoffice files immediately via fsnotify,
+		// so earlier tasks may already be in inboxes by the time a later
+		// post fails. The cleanup removes unrouted postoffice files but
+		// cannot recall already-routed messages. The taskboard's dependency
+		// evaluation prevents premature execution of downstream steps.
+		var posted []string
+		for _, msg := range messages {
+			if err := postMessage(cfg.PoolDir, msg); err != nil {
+				postofficeDir := filepath.Join(cfg.PoolDir, "postoffice")
+				for _, id := range posted {
+					os.Remove(filepath.Join(postofficeDir, id+".md"))
+				}
+				return mcp.NewToolResultError(fmt.Sprintf("posting task %s: %v (cleaned up %d postoffice files, some may have been routed)", msg.ID, err, len(posted))), nil
+			}
+			posted = append(posted, msg.ID)
+		}
+
+		return mcp.NewToolResultText(fmt.Sprintf(
+			"formula %q instantiated: %d tasks created [%s]",
+			formulaName, len(taskIDs), strings.Join(taskIDs, ", "))), nil
 	}
 }
 

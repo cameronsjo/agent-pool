@@ -7,15 +7,27 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
 
+// EventKind distinguishes the type of file event.
+type EventKind int
+
+const (
+	// EventKindMail is a new .md file (mail delivery).
+	EventKindMail EventKind = iota
+	// EventKindConfig is a .toml file write (config change).
+	EventKindConfig
+)
+
 // WatcherEvent carries a validated file event.
 type WatcherEvent struct {
-	Path string // full path to the new file
-	Dir  string // which watched directory this came from
+	Path string    // full path to the new file
+	Dir  string    // which watched directory this came from
+	Kind EventKind // mail or config
 }
 
 // Watcher watches directories for new .md files and emits events
@@ -24,7 +36,9 @@ type Watcher struct {
 	fsw    *fsnotify.Watcher
 	events chan WatcherEvent
 	logger *slog.Logger
-	dirs   map[string]bool // tracked directories for Dir resolution
+
+	mu   sync.Mutex
+	dirs map[string]bool // tracked directories for Dir resolution
 }
 
 const (
@@ -49,12 +63,15 @@ func NewWatcher(logger *slog.Logger) (*Watcher, error) {
 }
 
 // Add registers a directory to watch. The directory must exist.
+// Safe to call concurrently with Run (dirs map is guarded by w.mu).
 func (w *Watcher) Add(dir string) error {
 	absDir, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
+	w.mu.Lock()
 	w.dirs[absDir] = true
+	w.mu.Unlock()
 	return w.fsw.Add(absDir)
 }
 
@@ -64,8 +81,11 @@ func (w *Watcher) Events() <-chan WatcherEvent {
 }
 
 // Run processes raw fsnotify events until ctx is cancelled.
-// It filters for Create events on .md files and applies a partial-write
-// stability check before emitting on the Events channel.
+// It handles two kinds of events:
+//   - Create events on .md files (mail delivery) → EventKindMail
+//   - Write events on .toml files (config changes) → EventKindConfig
+//
+// Both kinds apply a partial-write stability check before emitting.
 func (w *Watcher) Run(ctx context.Context) {
 	defer close(w.events)
 
@@ -79,34 +99,52 @@ func (w *Watcher) Run(ctx context.Context) {
 				return
 			}
 
-			if !event.Has(fsnotify.Create) {
-				continue
-			}
-
-			if !strings.HasSuffix(event.Name, ".md") {
-				continue
-			}
-
-			// Skip temp files from our own atomic writes
 			base := filepath.Base(event.Name)
-			if strings.HasPrefix(base, ".routing-") {
-				continue
-			}
-
 			path := event.Name
-			if err := waitForStable(path); err != nil {
-				w.logger.Warn("Skipping file. Reason: not stable after polling",
-					"path", path,
-					"error", err,
-				)
+
+			// Mail events: Create on .md files
+			if event.Has(fsnotify.Create) && strings.HasSuffix(base, ".md") {
+				// Skip temp files from our own atomic writes
+				if strings.HasPrefix(base, ".routing-") {
+					continue
+				}
+
+				if err := waitForStable(path); err != nil {
+					w.logger.Warn("Skipping file. Reason: not stable after polling",
+						"path", path,
+						"error", err,
+					)
+					continue
+				}
+
+				dir := w.resolveDir(path)
+				select {
+				case w.events <- WatcherEvent{Path: path, Dir: dir, Kind: EventKindMail}:
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
 
-			dir := w.resolveDir(path)
-			select {
-			case w.events <- WatcherEvent{Path: path, Dir: dir}:
-			case <-ctx.Done():
-				return
+			// Config events: Write or Create on .toml files.
+			// Write catches in-place edits. Create catches atomic
+			// temp-file + rename updates (which emit Create, not Write).
+			if (event.Has(fsnotify.Write) || event.Has(fsnotify.Create)) && strings.HasSuffix(base, ".toml") {
+				if err := waitForStable(path); err != nil {
+					w.logger.Warn("Skipping config file. Reason: not stable after polling",
+						"path", path,
+						"error", err,
+					)
+					continue
+				}
+
+				dir := w.resolveDir(path)
+				select {
+				case w.events <- WatcherEvent{Path: path, Dir: dir, Kind: EventKindConfig}:
+				case <-ctx.Done():
+					return
+				}
+				continue
 			}
 
 		case err, ok := <-w.fsw.Errors:
@@ -127,10 +165,9 @@ func (w *Watcher) Close() error {
 func (w *Watcher) resolveDir(path string) string {
 	absPath, _ := filepath.Abs(path)
 	dir := filepath.Dir(absPath)
-	if w.dirs[dir] {
-		return dir
-	}
-	// Fallback — shouldn't happen if all watched dirs are registered
+	w.mu.Lock()
+	_ = w.dirs[dir] // lookup under lock for race safety
+	w.mu.Unlock()
 	return dir
 }
 
