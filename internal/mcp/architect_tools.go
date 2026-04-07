@@ -401,16 +401,20 @@ func handleInstantiateFormula(cfg *ServerConfig) server.ToolHandlerFunc {
 			}
 		}
 
-		// Phase 2: Post all messages (all-or-nothing best effort)
+		// Phase 2: Post all messages. Best-effort cleanup on failure:
+		// the daemon routes postoffice files immediately via fsnotify,
+		// so earlier tasks may already be in inboxes by the time a later
+		// post fails. The cleanup removes unrouted postoffice files but
+		// cannot recall already-routed messages. The taskboard's dependency
+		// evaluation prevents premature execution of downstream steps.
 		var posted []string
 		for _, msg := range messages {
 			if err := postMessage(cfg.PoolDir, msg); err != nil {
-				// Clean up already-posted files on failure
 				postofficeDir := filepath.Join(cfg.PoolDir, "postoffice")
 				for _, id := range posted {
 					os.Remove(filepath.Join(postofficeDir, id+".md"))
 				}
-				return mcp.NewToolResultError(fmt.Sprintf("posting task %s: %v (rolled back %d previously posted)", msg.ID, err, len(posted))), nil
+				return mcp.NewToolResultError(fmt.Sprintf("posting task %s: %v (cleaned up %d postoffice files, some may have been routed)", msg.ID, err, len(posted))), nil
 			}
 			posted = append(posted, msg.ID)
 		}

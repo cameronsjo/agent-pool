@@ -39,7 +39,7 @@ import (
 func TestLoad_Valid(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.toml")
-	os.WriteFile(path, []byte(`
+	if err := os.WriteFile(path, []byte(`
 description = "test formula"
 
 [[steps]]
@@ -54,7 +54,9 @@ role = "architect"
 title = "Second step"
 description = "Do the second thing"
 depends_on = ["first"]
-`), 0o644)
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	f, err := Load(path)
 	if err != nil {
@@ -81,7 +83,9 @@ func TestLoad_MissingFile(t *testing.T) {
 func TestLoad_InvalidTOML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.toml")
-	os.WriteFile(path, []byte(`this is not valid toml [[[`), 0o644)
+	if err := os.WriteFile(path, []byte(`this is not valid toml [[[`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := Load(path)
 	if err == nil {
@@ -95,7 +99,9 @@ func TestLoad_InvalidTOML(t *testing.T) {
 func TestLoad_ValidTOMLInvalidFormula(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.toml")
-	os.WriteFile(path, []byte(`description = "no steps"`), 0o644)
+	if err := os.WriteFile(path, []byte(`description = "no steps"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := Load(path)
 	if err == nil {
@@ -138,9 +144,14 @@ role = "concierge"
 title = "Step A"
 `
 
-	os.WriteFile(filepath.Join(dir, "alpha.toml"), []byte(formulaTOML), 0o644)
-	os.WriteFile(filepath.Join(dir, "beta.toml"), []byte(formulaTOML), 0o644)
-	os.WriteFile(filepath.Join(dir, "readme.md"), []byte("not a formula"), 0o644)
+	for _, name := range []string{"alpha.toml", "beta.toml"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(formulaTOML), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "readme.md"), []byte("not a formula"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	formulas, err := LoadAll(dir)
 	if err != nil {
@@ -156,7 +167,9 @@ title = "Step A"
 
 func TestLoadAll_InvalidFormulaReturnsError(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "bad.toml"), []byte(`description = "no steps"`), 0o644)
+	if err := os.WriteFile(filepath.Join(dir, "bad.toml"), []byte(`description = "no steps"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	_, err := LoadAll(dir)
 	if err == nil {
