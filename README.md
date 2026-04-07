@@ -33,8 +33,7 @@ ln -sf $(pwd)/bin/agent-pool ~/bin/agent-pool
 
 # Create a pool inside your project
 cd ~/Projects/my-project
-mkdir -p .agent-pool/{postoffice,contracts,concierge/inbox,architect/inbox}
-mkdir -p .agent-pool/experts/backend/{inbox,logs}
+mkdir -p .agent-pool
 
 # Configure
 cat > .agent-pool/pool.toml << 'EOF'
@@ -51,6 +50,27 @@ EOF
 
 # Start the daemon (auto-discovers .agent-pool/ from cwd)
 agent-pool start
+
+# Check daemon status
+agent-pool status
+
+# Stop gracefully
+agent-pool stop
+```
+
+### Claude Code Plugin
+
+Install from the marketplace:
+
+```bash
+/plugin marketplace add cameronsjo/workbench
+/plugin install agent-pool@cameronsjo
+```
+
+Or point to a local build:
+
+```bash
+/plugin install /path/to/agent-pool
 ```
 
 ## Architecture
@@ -110,10 +130,10 @@ make check            # vet + lint + test
 | **v0.3** | Complete | Task board — dependency DAG, cancellation, health checks |
 | **v0.4** | Complete | Architect — contracts, verification loop, role-aware MCP |
 | **v0.5** | Complete | Concierge plugin — MCP tools, skills, read/write path flows |
-| v0.6 | Next | Daemon lifecycle — unix socket, stop/status/watch, graceful drain |
-| v0.7 | Planned | Shared experts — cross-project knowledge, multi-pool |
-| v0.8 | Planned | Researcher — curation, cold-start seeding |
-| v0.9 | Planned | Formulas — workflow templates, operational hardening |
+| **v0.6** | Complete | Daemon lifecycle — unix socket, stop/status/watch, graceful drain |
+| **v0.7** | Complete | Shared experts — cross-project knowledge, multi-pool |
+| **v0.8** | Complete | Researcher — curation, cold-start seeding, pattern promotion |
+| v0.9 | In progress | Formulas — workflow templates, config hot-reload |
 
 ## License
 

@@ -1,0 +1,20 @@
+{
+  "name": "agent-pool",
+  "description": "Expert pool — delegate questions and tasks to domain specialists via a mixture-of-experts model",
+  "author": {
+    "name": "Cameron Sjo",
+    "url": "https://github.com/cameronsjo"
+  },
+  "repository": "https://github.com/cameronsjo/agent-pool",
+  "license": "MIT",
+  "keywords": [
+    "agent-pool",
+    "experts",
+    "mixture-of-experts",
+    "delegation",
+    "multi-agent",
+    "mcp",
+    "concierge",
+    "architect"
+  ]
+}

@@ -40,7 +40,7 @@ Agent Pool builds ON Claude Code via external interfaces — it does NOT modify 
 - **CLI**: `claude -p --output-format stream-json --model sonnet --allowedTools "..."`
 - **MCP server**: `agent-pool mcp --pool {name} --expert {name}` (experts) or `--role {architect|concierge}` (built-in roles)
 - **Hooks**: Stop → flush, PreToolUse → code ownership guard
-- **Plugin**: `plugin/` — skills (`pool-ask`, `pool-build`, `pool-status`) + `.mcp.json` for concierge
+- **Plugin**: repo root — skills (`pool-ask`, `pool-build`, `pool-status`, `pool-research`) + `.mcp.json` for concierge
 - **Env vars**: `AGENT_POOL_NAME`, `AGENT_POOL_EXPERT`, `AGENT_POOL_TASK_ID`
 
 ## Project Structure
@@ -57,7 +57,10 @@ internal/
   mail/               Message parsing, routing, delivery
   mcp/                MCP server (stdio, per-role tool sets)
   taskboard/          DAG-based task tracking with dependency evaluation
-plugin/               Claude Code plugin (skills, MCP config, identity)
+skills/               Claude Code plugin skills (pool-ask, pool-build, pool-status, pool-research)
+.claude-plugin/       Plugin manifest for marketplace
+.mcp.json             MCP server config for concierge role
+concierge-identity.md Concierge role identity
 docs/
   plans/              Architecture and development plans
   prompts/            Version-specific development prompts
@@ -77,7 +80,7 @@ make check            # vet + lint + test
 
 ## Implementation Status
 
-**v0.5 complete** — through Concierge Plugin. See `docs/plans/architecture.md` § Implementation Phasing for full v0.1–v0.8 roadmap.
+**v0.8 complete** — through Researcher + Curation. v0.9 (formulas + polish) in progress. See `docs/plans/architecture.md` § Implementation Phasing for full roadmap.
 
 | Version | Milestone | Key Additions |
 |---------|-----------|---------------|
@@ -85,8 +88,11 @@ make check            # vet + lint + test
 | v0.3 | Task Board | DAG dependencies, cancel/handoff, session timeout |
 | v0.4 | Architect | Contracts, approval gate, task delegation, verification |
 | v0.5 | Concierge | Concierge MCP tools, plugin scaffold, read/write path flows |
+| v0.6 | Daemon Lifecycle | Unix socket, stop/status/watch, graceful drain |
+| v0.7 | Shared Experts | Cross-project knowledge, multi-pool, project overlays |
+| v0.8 | Researcher | Curation, pattern promotion, cold-start seeding |
 
-Next: **v0.6** — Researcher + Curation
+Next: **v0.9** — Formulas + Polish
 
 ## Code Conventions
 
