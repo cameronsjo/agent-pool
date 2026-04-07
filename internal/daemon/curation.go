@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cameronsjo/agent-pool/internal/config"
+	"github.com/cameronsjo/agent-pool/internal/expert"
 	"github.com/cameronsjo/agent-pool/internal/mail"
 )
 
@@ -72,6 +73,9 @@ func (d *Daemon) triggerCuration(reason string) {
 	d.logger.Info("Triggering curation",
 		"reason", reason,
 	)
+
+	// Rotate logs for all experts before curation
+	d.rotateAllLogs()
 
 	body := buildCurationTaskBody(d.cfg, d.poolDir, reason)
 
@@ -142,6 +146,44 @@ func buildCurationTaskBody(cfg *config.PoolConfig, poolDir, reason string) strin
 	b.WriteString("for patterns that should become permanent identity.\n")
 
 	return b.String()
+}
+
+// rotateAllLogs runs log rotation for all experts (pool-scoped and shared).
+func (d *Daemon) rotateAllLogs() {
+	retention := d.cfg.Defaults.LogRetention
+
+	for name := range d.cfg.Experts {
+		dir := mail.ResolveExpertDir(d.poolDir, name)
+		if archived, err := expert.RotateLogs(dir, retention); err != nil {
+			d.logger.Warn("Failed to rotate logs",
+				"expert", name,
+				"error", err,
+			)
+		} else if archived > 0 {
+			d.logger.Info("Rotated expert logs",
+				"expert", name,
+				"archived", archived,
+			)
+		}
+	}
+
+	for _, name := range d.cfg.Shared.Include {
+		dir, err := config.SharedExpertDir(name)
+		if err != nil {
+			continue
+		}
+		if archived, rotErr := expert.RotateLogs(dir, retention); rotErr != nil {
+			d.logger.Warn("Failed to rotate shared expert logs",
+				"expert", name,
+				"error", rotErr,
+			)
+		} else if archived > 0 {
+			d.logger.Info("Rotated shared expert logs",
+				"expert", name,
+				"archived", archived,
+			)
+		}
+	}
 }
 
 func fileSize(path string) int64 {
