@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"io"
 	"log/slog"
 	"net"
@@ -102,7 +104,11 @@ func cmdAdd() {
 
 	expertName := os.Args[2]
 	flags := parseFlagsFromArgs(os.Args[3:], "model")
-	model := flags["model"] // empty = use defaults
+	model := flags["model"]
+	if model != "" && strings.HasPrefix(model, "-") {
+		fmt.Fprintf(os.Stderr, "error: --model requires a value\n")
+		os.Exit(1)
+	}
 
 	poolDir, err := config.DiscoverPoolDir("")
 	if err != nil {
@@ -124,9 +130,10 @@ func cmdAdd() {
 
 // addExpert appends an expert section to pool.toml and creates its directories.
 func addExpert(poolDir, name, model string) error {
-	// Validate name
-	if name == "" || name != filepath.Base(name) || name == "." || name == ".." {
-		return fmt.Errorf("invalid expert name %q: must be a simple name (no paths)", name)
+	// Validate name: must be alphanumeric, hyphens, or underscores (safe for TOML keys and filenames)
+	validName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	if !validName.MatchString(name) {
+		return fmt.Errorf("invalid expert name %q: must contain only letters, digits, hyphens, or underscores", name)
 	}
 	if config.BuiltinRoleNames[name] {
 		return fmt.Errorf("%q is a built-in role, not an expert name", name)
@@ -195,8 +202,14 @@ func listExperts(poolDir string, cfg *config.PoolConfig) {
 
 	var experts []expertInfo
 
-	// Pool-scoped experts
-	for name, sec := range cfg.Experts {
+	// Pool-scoped experts (sorted for stable output)
+	expertNames := make([]string, 0, len(cfg.Experts))
+	for name := range cfg.Experts {
+		expertNames = append(expertNames, name)
+	}
+	sort.Strings(expertNames)
+	for _, name := range expertNames {
+		sec := cfg.Experts[name]
 		model := sec.Model
 		if model == "" {
 			model = cfg.Defaults.Model

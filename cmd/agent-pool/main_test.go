@@ -255,6 +255,19 @@ func TestAddExpert_Duplicate(t *testing.T) {
 	}
 }
 
+func TestAddExpert_InvalidName(t *testing.T) {
+	tmp := t.TempDir()
+	poolDir := filepath.Join(tmp, ".agent-pool")
+	initPool(poolDir, "test", tmp)
+
+	for _, name := range []string{"has space", "has.dot", "has/slash", `has"quote`} {
+		err := addExpert(poolDir, name, "")
+		if err == nil {
+			t.Errorf("expected error for name %q, got nil", name)
+		}
+	}
+}
+
 func TestAddExpert_BuiltinRole(t *testing.T) {
 	tmp := t.TempDir()
 	poolDir := filepath.Join(tmp, ".agent-pool")
