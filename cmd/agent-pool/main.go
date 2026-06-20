@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"regexp"
+	"sort"
 	"io"
 	"log/slog"
 	"net"
@@ -30,6 +33,12 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "init":
+		cmdInit()
+	case "add":
+		cmdAdd()
+	case "list":
+		cmdList()
 	case "start":
 		cmdStart()
 	case "stop":
@@ -47,7 +56,7 @@ func main() {
 	case "seed":
 		cmdSeed()
 	case "version":
-		fmt.Println("agent-pool v0.6.0-dev")
+		fmt.Println("agent-pool v0.9.0")
 	case "help", "--help", "-h":
 		printUsage()
 	default:
@@ -55,6 +64,240 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+}
+
+func cmdInit() {
+	poolDir := ".agent-pool"
+	if len(os.Args) > 2 {
+		poolDir = os.Args[2]
+	}
+	poolDir = expandTilde(poolDir)
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	poolName := filepath.Base(cwd)
+	if err := initPool(poolDir, poolName, cwd); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Initialized pool %q in %s\n", poolName, poolDir)
+	fmt.Println()
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Add experts:")
+	fmt.Println("     agent-pool add backend")
+	fmt.Println("     agent-pool add frontend --model opus")
+	fmt.Println()
+	fmt.Println("  2. Start the daemon:")
+	fmt.Println("     agent-pool start")
+}
+
+func cmdAdd() {
+	if len(os.Args) < 3 {
+		fmt.Fprintf(os.Stderr, "usage: agent-pool add <name> [--model <model>]\n")
+		os.Exit(1)
+	}
+
+	expertName := os.Args[2]
+	flags := parseFlagsFromArgs(os.Args[3:], "model")
+	model := flags["model"]
+	if model != "" && strings.HasPrefix(model, "-") {
+		fmt.Fprintf(os.Stderr, "error: --model requires a value\n")
+		os.Exit(1)
+	}
+
+	poolDir, err := config.DiscoverPoolDir("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := addExpert(poolDir, expertName, model); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if model == "" {
+		fmt.Printf("Added expert %q (using default model)\n", expertName)
+	} else {
+		fmt.Printf("Added expert %q (model: %s)\n", expertName, model)
+	}
+}
+
+// addExpert appends an expert section to pool.toml and creates its directories.
+func addExpert(poolDir, name, model string) error {
+	// Validate name: must be alphanumeric, hyphens, or underscores (safe for TOML keys and filenames)
+	validName := regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	if !validName.MatchString(name) {
+		return fmt.Errorf("invalid expert name %q: must contain only letters, digits, hyphens, or underscores", name)
+	}
+	if config.BuiltinRoleNames[name] {
+		return fmt.Errorf("%q is a built-in role, not an expert name", name)
+	}
+
+	// Check not already in config
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		return fmt.Errorf("loading pool config: %w", err)
+	}
+	if _, exists := cfg.Experts[name]; exists {
+		return fmt.Errorf("expert %q already exists in pool config", name)
+	}
+
+	// Append to pool.toml
+	tomlPath := filepath.Join(poolDir, "pool.toml")
+	f, err := os.OpenFile(tomlPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", tomlPath, err)
+	}
+	defer f.Close()
+
+	section := fmt.Sprintf("\n[experts.%s]\n", name)
+	if model != "" {
+		section += fmt.Sprintf("model = %q\n", model)
+	}
+	if _, err := f.WriteString(section); err != nil {
+		return fmt.Errorf("writing to %s: %w", tomlPath, err)
+	}
+
+	// Create directories
+	expertBase := filepath.Join(poolDir, "experts", name)
+	for _, sub := range []string{"inbox", "logs"} {
+		if err := os.MkdirAll(filepath.Join(expertBase, sub), 0o755); err != nil {
+			return fmt.Errorf("creating expert directory: %w", err)
+		}
+	}
+
+	return nil
+}
+
+func cmdList() {
+	poolDir, err := config.DiscoverPoolDir("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.LoadPool(poolDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	listExperts(poolDir, cfg)
+}
+
+// listExperts prints a formatted table of pool-scoped and shared experts.
+func listExperts(poolDir string, cfg *config.PoolConfig) {
+	type expertInfo struct {
+		Name   string
+		Model  string
+		Scope  string
+		Has    []string // which state files exist
+	}
+
+	var experts []expertInfo
+
+	// Pool-scoped experts (sorted for stable output)
+	expertNames := make([]string, 0, len(cfg.Experts))
+	for name := range cfg.Experts {
+		expertNames = append(expertNames, name)
+	}
+	sort.Strings(expertNames)
+	for _, name := range expertNames {
+		sec := cfg.Experts[name]
+		model := sec.Model
+		if model == "" {
+			model = cfg.Defaults.Model
+		}
+		info := expertInfo{Name: name, Model: model, Scope: "pool"}
+		expertDir := filepath.Join(poolDir, "experts", name)
+		for _, file := range []string{"identity.md", "state.md", "errors.md"} {
+			if _, err := os.Stat(filepath.Join(expertDir, file)); err == nil {
+				info.Has = append(info.Has, strings.TrimSuffix(file, ".md"))
+			}
+		}
+		experts = append(experts, info)
+	}
+
+	// Shared experts
+	for _, name := range cfg.Shared.Include {
+		model := cfg.Defaults.Model
+		info := expertInfo{Name: name, Model: model, Scope: "shared"}
+		sharedDir, err := config.SharedExpertDir(name)
+		if err == nil {
+			for _, file := range []string{"identity.md", "state.md", "errors.md"} {
+				if _, err := os.Stat(filepath.Join(sharedDir, file)); err == nil {
+					info.Has = append(info.Has, strings.TrimSuffix(file, ".md"))
+				}
+			}
+		}
+		experts = append(experts, info)
+	}
+
+	if len(experts) == 0 {
+		fmt.Println("No experts configured. Add one with:")
+		fmt.Println("  agent-pool add <name>")
+		return
+	}
+
+	fmt.Printf("%-20s %-10s %-8s %s\n", "EXPERT", "MODEL", "SCOPE", "STATE")
+	fmt.Printf("%-20s %-10s %-8s %s\n", "------", "-----", "-----", "-----")
+	for _, e := range experts {
+		state := "-"
+		if len(e.Has) > 0 {
+			state = strings.Join(e.Has, ", ")
+		}
+		fmt.Printf("%-20s %-10s %-8s %s\n", e.Name, e.Model, e.Scope, state)
+	}
+}
+
+// initPool creates the pool directory structure and writes a minimal pool.toml.
+func initPool(poolDir, poolName, projectDir string) error {
+	tomlPath := filepath.Join(poolDir, "pool.toml")
+	if _, err := os.Stat(tomlPath); err == nil {
+		return fmt.Errorf("%s already exists", tomlPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking %s: %w", tomlPath, err)
+	}
+
+	dirs := []string{
+		filepath.Join(poolDir, "postoffice"),
+		filepath.Join(poolDir, "contracts"),
+		filepath.Join(poolDir, "formulas"),
+		filepath.Join(poolDir, "architect", "inbox"),
+		filepath.Join(poolDir, "architect", "logs"),
+		filepath.Join(poolDir, "researcher", "inbox"),
+		filepath.Join(poolDir, "researcher", "logs"),
+		filepath.Join(poolDir, "concierge", "inbox"),
+	}
+
+	for _, dir := range dirs {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("creating %s: %w", dir, err)
+		}
+	}
+
+	toml := fmt.Sprintf(`[pool]
+name = %q
+project_dir = %q
+
+[architect]
+model = "opus"
+
+[defaults]
+model = "sonnet"
+`, poolName, projectDir)
+
+	if err := os.WriteFile(tomlPath, []byte(toml), 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", tomlPath, err)
+	}
+
+	return nil
 }
 
 func cmdStart() {
@@ -544,6 +787,21 @@ func newStderrLogger() *slog.Logger {
 	}))
 }
 
+// expandTilde replaces a leading ~ with the user's home directory.
+func expandTilde(path string) string {
+	if path == "~" || strings.HasPrefix(path, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		if path == "~" {
+			return home
+		}
+		return filepath.Join(home, path[2:])
+	}
+	return path
+}
+
 // parseFlags extracts named --flag value pairs from os.Args[start:].
 func parseFlags(start int, names ...string) map[string]string {
 	return parseFlagsFromArgs(os.Args[start:], names...)
@@ -661,26 +919,26 @@ func printUsage() {
 	fmt.Println(`agent-pool — process supervisor for Claude Code expert sessions
 
 Usage:
-  agent-pool start [pool-dir]                          Start the daemon for a pool
-  agent-pool stop [pool-dir]                           Stop a running daemon
-  agent-pool status [pool-dir]                         Show daemon status
-  agent-pool watch [pool-dir]                          Stream daemon events
-  agent-pool mcp --pool <dir> --expert <name>          Start expert MCP server (stdio)
-  agent-pool mcp --pool <dir> --role <role>            Start built-in role MCP server
-  agent-pool seed --pool <dir> --expert <name>                Cold-start expert state via researcher
-  agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook: verify state
-  agent-pool guard --pool <dir> --expert <name> --path <file> PreToolUse hook: ownership guard
-  agent-pool version                                   Print version
-  agent-pool help                                      Show this help
+  agent-pool init [pool-dir]              Initialize a new pool (default: .agent-pool/)
+  agent-pool add <name> [--model <model>] Add an expert to the pool
+  agent-pool list                         Show experts and their state
+  agent-pool start [pool-dir]             Start the daemon
+  agent-pool stop [pool-dir]              Stop the daemon
+  agent-pool status [pool-dir]            Daemon health and task summary
+  agent-pool watch [pool-dir]             Stream daemon events live
+  agent-pool seed --expert <name>         Cold-start an expert via researcher
+  agent-pool version                      Print version
+  agent-pool help                         Show this help
 
-Roles:
-  architect    Contract definition, task delegation, verification
-  concierge    User-facing coordination (read/write path tools)
-  researcher   Enrichment and curation
+Getting started:
+  agent-pool init                         Create a pool in the current project
+  agent-pool add backend                  Add a backend expert
+  agent-pool add frontend --model opus    Add a frontend expert on Opus
+  agent-pool start                        Start the daemon
 
-Examples:
-  agent-pool start ~/.agent-pool/pools/api-gateway
-  agent-pool stop
-  agent-pool status
-  agent-pool mcp --pool ./my-pool --role concierge`)
+Internal (hooks and plumbing):
+  agent-pool mcp --pool <dir> --expert <name>          Expert MCP server (stdio)
+  agent-pool mcp --pool <dir> --role <role>            Built-in role MCP server
+  agent-pool flush --pool <dir> --expert <name> --task <id>   Stop hook
+  agent-pool guard --pool <dir> --expert <name> --path <file> Ownership guard`)
 }
